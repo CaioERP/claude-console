@@ -110,3 +110,7 @@ npm run typecheck
 ```
 
 There is no separate backend: a Vite plugin (`server/plugin.ts`) answers `/api/*` from the collectors in `server/`. Pages poll every 10 seconds and reload themselves when the service restarts with a new build.
+
+## License
+
+[MIT](LICENSE)

@@ -1,6 +1,7 @@
 {
   "name": "claude-console",
   "private": true,
+  "license": "MIT",
   "version": "0.1.0",
   "type": "module",
   "description": "Local dashboard for worktrees, open PRs, CI and Claude Code sessions",
