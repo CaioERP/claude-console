@@ -5,7 +5,8 @@ import type { Plugin } from 'vite'
 
 import { config } from './config'
 import { getSnapshot, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
-import { openExternally, openTerminal } from './open'
+import { isWindowAction, openExternally, openTerminal, windowAction } from './open'
+import { readBattery } from './system'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -145,6 +146,34 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (url.pathname === '/api/brand-icon') return handleIcon(res)
+
+  if (url.pathname === '/api/system') {
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(JSON.stringify({ battery: await readBattery() }))
+    return
+  }
+
+  const windowPath = /^\/api\/window\/([a-z]+)$/.exec(url.pathname)
+
+  if (windowPath && isWindowAction(windowPath[1]!)) {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    try {
+      await windowAction(windowPath[1])
+      res.statusCode = 204
+      res.end()
+    } catch (error) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
 
   if (url.pathname === '/api/open') return handleOpen(req, res)
 

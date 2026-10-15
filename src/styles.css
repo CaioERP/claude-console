@@ -127,6 +127,140 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* Window bar */
+
+.window-bar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 2.5rem;
+  padding: 0 0.4rem 0 1rem;
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  user-select: none;
+}
+
+.win-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.win-title .brand-mark {
+  display: block;
+  flex: none;
+}
+
+.win-status {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 0.82rem;
+}
+
+.win-status > .win-button + .win-button {
+  margin-left: -0.9rem;
+}
+
+.win-battery {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.win-battery svg {
+  display: block;
+}
+
+.win-battery-fill {
+  fill: var(--moss);
+}
+
+.win-battery[data-level='low'] .win-battery-fill {
+  fill: var(--amber);
+}
+
+.win-battery[data-level='critical'] {
+  color: var(--brick);
+}
+
+.win-battery[data-level='critical'] .win-battery-fill {
+  fill: var(--brick);
+}
+
+.win-clock {
+  white-space: nowrap;
+}
+
+.win-clock strong,
+.win-battery {
+  font-variant-numeric: tabular-nums;
+}
+
+.win-clock strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.win-error {
+  overflow: hidden;
+  color: var(--brick);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.win-button {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.win-button:hover,
+.win-button:focus-visible {
+  background: var(--strip-0);
+  color: var(--ink);
+}
+
+.win-close:hover,
+.win-close:focus-visible {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .win-date,
+  .win-battery > span:not(.visually-hidden) {
+    display: none;
+  }
+}
+
 .shell {
   max-width: 1480px;
   margin: 0 auto;

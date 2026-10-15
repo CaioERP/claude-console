@@ -130,6 +130,8 @@ export type QueuedPr = {
 
 export type ReviewQueue = { name: string; repo: string; waiting: QueuedPr[]; recent: QueuedPr[] }
 
+export type Battery = { percent: number; isCharging: boolean; isPluggedIn: boolean }
+
 export type ConsoleFeatures = {
   title: string
   hasIcon: boolean

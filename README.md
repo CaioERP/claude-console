@@ -11,7 +11,7 @@ Everything runs on your machine. The console reads your local Claude Code files,
 - **git**, **jq**, **curl**, and **ss** (from iproute2).
 - **GitHub CLI** (`gh`), signed in: `gh auth status` must succeed.
 - **Claude Code**, with its data in `~/.claude`.
-- Optional: a Chromium-based browser (Chrome, Chromium, Brave, or Edge) to open the console in its own app window; `xdotool` and `wmctrl` to size and focus that window; [Ghostty](https://ghostty.org) for the buttons that open a worktree or resume a session in a new terminal tab.
+- Optional: a Chromium-based browser (Chrome, Chromium, Brave, or Edge) to open the console in its own app window; `xdotool` and `wmctrl` to size, focus, maximize, and close that window; [Ghostty](https://ghostty.org) for the buttons that open a worktree or resume a session in a new terminal tab.
 
 ## Install
 
@@ -83,6 +83,7 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 - **Activity.** A contribution heatmap that combines GitHub contributions with Claude tool calls.
 - **Briefing.** What you did on your last working day, one line per Claude session with its recap, every pull request you opened, merged, or closed since yesterday, and the tickets in progress.
 - **Claude sessions.** Running and recent sessions with their worktree, branch, context use, cost, recap, and linked pull requests, read from `~/.claude/sessions`, `~/.claude/projects`, and the status line's snapshots.
+- **Window bar.** The console's name, the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
 - **Claude usage.** The 5-hour and 7-day rate-limit windows, today's tokens and cost, and a 14-day chart.
 - **Memory and artifacts.** The Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
 - **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.

@@ -60,3 +60,26 @@ export const openExternally = async (url: string) => {
 
   child.unref()
 }
+
+const WINDOW_ACTIONS = {
+  close: { args: ['-x', '-c', 'ClaudeConsole'], verb: 'close' },
+  maximize: { args: ['-x', '-r', 'ClaudeConsole', '-b', 'toggle,maximized_vert,maximized_horz'], verb: 'maximize' },
+} as const
+
+export type WindowAction = keyof typeof WINDOW_ACTIONS
+
+export const isWindowAction = (value: string): value is WindowAction => Object.hasOwn(WINDOW_ACTIONS, value)
+
+// Closes the console's own app window, or toggles it between maximized and its
+// previous size, through the window manager. The launcher opens that window
+// with the ClaudeConsole window class.
+export const windowAction = async (action: WindowAction) => {
+  const env = { ...process.env, ...(await desktopEnv()) }
+  const { args, verb } = WINDOW_ACTIONS[action]
+
+  await new Promise<void>((resolve, reject) => {
+    execFile('wmctrl', [...args], { env, timeout: 5_000 }, error =>
+      error ? reject(new Error(`Could not ${verb} the window: wmctrl is missing or no console window is open.`)) : resolve(),
+    )
+  })
+}

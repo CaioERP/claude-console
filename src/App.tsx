@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type {
+  Battery,
   Activity,
   ReviewQueue,
   Briefing,
@@ -57,6 +58,205 @@ const readTheme = (): Theme => {
   } catch {
     return 'system'
   }
+}
+
+const SYSTEM_POLL_MS = 30_000
+
+const useBattery = () => {
+  const [battery, setBattery] = useState<Battery | null>(null)
+
+  useEffect(() => {
+    let isActive = true
+
+    const load = async () => {
+      try {
+        const response = await fetch('/api/system')
+
+        if (response.ok && isActive) setBattery(((await response.json()) as { battery: Battery | null }).battery)
+      } catch {
+        // Keep the last reading until the server answers again.
+      }
+    }
+
+    void load()
+    const timer = setInterval(() => void load(), SYSTEM_POLL_MS)
+
+    return () => {
+      isActive = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  return battery
+}
+
+// The wall clock, ticking over exactly on each new minute.
+const useClock = () => {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>
+
+    const schedule = () => {
+      timer = setTimeout(() => {
+        setNow(Date.now())
+        schedule()
+      }, 60_000 - (Date.now() % 60_000) + 50)
+    }
+
+    schedule()
+
+    return () => clearTimeout(timer)
+  }, [])
+
+  return now
+}
+
+const batteryLevel = (battery: Battery) =>
+  battery.isCharging || battery.isPluggedIn ? 'ok' : battery.percent <= 15 ? 'critical' : battery.percent <= 30 ? 'low' : 'ok'
+
+const BatteryMeter = ({ battery }: { battery: Battery }) => {
+  const state = battery.isCharging ? 'charging' : battery.isPluggedIn ? 'plugged in' : 'on battery'
+
+  return (
+    <span className="win-battery" data-level={batteryLevel(battery)} title={`Battery ${battery.percent}%, ${state}`}>
+      <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
+        <rect x="0.5" y="0.5" width="20" height="11" rx="2.5" fill="none" stroke="currentColor" opacity="0.55" />
+        <rect x="21.5" y="3.5" width="2" height="5" rx="1" fill="currentColor" opacity="0.55" />
+        <rect className="win-battery-fill" x="2" y="2" width={(17 * battery.percent) / 100} height="8" rx="1.5" />
+        {battery.isCharging && (
+          <path d="M11.6 1.5 7.4 6.6h3l-.9 3.9 4.2-5.1h-3z" fill="var(--ink)" stroke="var(--surface)" strokeWidth="0.8" paintOrder="stroke" />
+        )}
+      </svg>
+      <span>{battery.percent}%</span>
+      <span className="visually-hidden">, {state}</span>
+    </span>
+  )
+}
+
+const closeWindow = async () => {
+  window.close()
+
+  // A page may not close a window it did not open; then the server closes the
+  // console's app window through the window manager.
+  await new Promise(resolve => setTimeout(resolve, 250))
+
+  if (!window.closed) await windowAction('close')
+}
+
+const windowAction = async (action: 'close' | 'maximize') => {
+  const response = await fetch(`/api/window/${action}`, { method: 'POST', headers: { 'X-Claude-Console': '1' } })
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+
+    throw new Error(body.error ?? `Could not ${action} the window.`)
+  }
+}
+
+// Whether the window fills the screen, maximized by the window manager or in
+// full screen, kept current as it is resized.
+const useIsMaximized = () => {
+  const measure = () =>
+    !!document.fullscreenElement ||
+    (window.outerWidth >= screen.availWidth - 2 && window.outerHeight >= screen.availHeight - 2)
+  const [isMaximized, setIsMaximized] = useState(measure)
+
+  useEffect(() => {
+    const update = () => setIsMaximized(measure())
+
+    window.addEventListener('resize', update)
+    document.addEventListener('fullscreenchange', update)
+
+    return () => {
+      window.removeEventListener('resize', update)
+      document.removeEventListener('fullscreenchange', update)
+    }
+  }, [])
+
+  return isMaximized
+}
+
+// Toggles the app window between maximized and its previous size; in a browser
+// tab, where the window manager cannot reach it, toggles full screen instead.
+const toggleMaximized = async () => {
+  if (document.fullscreenElement) return document.exitFullscreen()
+
+  try {
+    await windowAction('maximize')
+  } catch {
+    await document.documentElement.requestFullscreen()
+  }
+}
+
+// A title bar in the manner of a desktop window: the console's name on the left,
+// the battery, the time, and maximize and close buttons on the right.
+const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
+  const battery = useBattery()
+  const now = useClock()
+  const isMaximized = useIsMaximized()
+  const [windowError, setWindowError] = useState('')
+  const date = new Date(now)
+
+  return (
+    <div className="window-bar">
+      <h1 className="win-title">
+        {hasIcon && <img className="brand-mark" src="/api/brand-icon" alt="" width={18} height={18} />}
+        {title}
+      </h1>
+      <div className="win-status">
+        {windowError && (
+          <span className="win-error" role="alert">
+            {windowError}
+          </span>
+        )}
+        {battery && <BatteryMeter battery={battery} />}
+        <time className="win-clock" dateTime={date.toISOString()} title={date.toLocaleString()}>
+          <span className="win-date">{date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} </span>
+          <strong>{date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong>
+        </time>
+        <button
+          type="button"
+          className="win-button"
+          aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+          title={isMaximized ? 'Restore window' : 'Maximize window'}
+          onClick={() => {
+            setWindowError('')
+            toggleMaximized().catch((error: unknown) =>
+              setWindowError(error instanceof Error ? error.message : String(error)),
+            )
+          }}
+        >
+          {isMaximized ? (
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="1.5" y="3.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M3.5 3.5V2.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="1.5" y="1.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            </svg>
+          )}
+        </button>
+        <button
+          type="button"
+          className="win-button win-close"
+          aria-label="Close window"
+          title="Close window"
+          onClick={() => {
+            setWindowError('')
+            closeWindow().catch((error: unknown) =>
+              setWindowError(error instanceof Error ? error.message : String(error)),
+            )
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
 }
 
 const ThemeSwitch = () => {
@@ -2464,72 +2664,69 @@ export const App = () => {
   ].filter(Boolean)
 
   return (
-    <main className="shell">
-      <BurstLayer />
-      <header className="top">
-        <div className="top-line">
-          <h1 className="title">
-            {snapshot.features.hasIcon && (
-              <img className="brand-mark" src="/api/brand-icon" alt="" width={26} height={26} />
-            )}{' '}
-            {snapshot.features.title}
-          </h1>
-          <code className="repo">{snapshot.repo}</code>
-          <span className="updated">
-            <span
-              className="sync"
-              data-busy={isFetching || isRefreshing}
-              role="status"
-              aria-label={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
-              title={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
-            />
-            Worktrees {ago(snapshot.worktreesAt, now)}, pull requests {ago(snapshot.prsAt, now)}
-          </span>
-          <ThemeSwitch />
-          <button type="button" onClick={refresh} disabled={isRefreshing}>
-            {isRefreshing ? 'Refreshing…' : 'Refresh now'}
-          </button>
-        </div>
-        {problems.map(p => (
-          <p key={p as string} className="problem" role="alert">
-            {p}
-          </p>
-        ))}
-      </header>
-      <BriefingCard snapshot={snapshot} now={now} />
-      <div className="grid">
-        <div className="column">
-          <Sessions
-            sessions={snapshot.sessions}
-            now={now}
-            worktrees={snapshot.worktrees}
-            prs={snapshot.prs}
-            queue={snapshot.queue}
-            artifacts={snapshot.artifacts}
-          />
-          <Worktrees worktrees={snapshot.worktrees} now={now} />
-          {snapshot.features.jira && (
-            <JiraTickets
-              issues={snapshot.jira}
-              worktrees={snapshot.worktrees}
-              prs={snapshot.prs}
+    <>
+      <WindowBar title={snapshot.features.title} hasIcon={snapshot.features.hasIcon} />
+      <main className="shell">
+        <BurstLayer />
+        <header className="top">
+          <div className="top-line">
+            <code className="repo">{snapshot.repo}</code>
+            <span className="updated">
+              <span
+                className="sync"
+                data-busy={isFetching || isRefreshing}
+                role="status"
+                aria-label={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
+                title={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
+              />
+              Worktrees {ago(snapshot.worktreesAt, now)}, pull requests {ago(snapshot.prsAt, now)}
+            </span>
+            <ThemeSwitch />
+            <button type="button" onClick={refresh} disabled={isRefreshing}>
+              {isRefreshing ? 'Refreshing…' : 'Refresh now'}
+            </button>
+          </div>
+          {problems.map(p => (
+            <p key={p as string} className="problem" role="alert">
+              {p}
+            </p>
+          ))}
+        </header>
+        <BriefingCard snapshot={snapshot} now={now} />
+        <div className="grid">
+          <div className="column">
+            <Sessions
               sessions={snapshot.sessions}
               now={now}
+              worktrees={snapshot.worktrees}
+              prs={snapshot.prs}
+              queue={snapshot.queue}
+              artifacts={snapshot.artifacts}
             />
-          )}
-          <MemoryCard notes={snapshot.memory} now={now} />
+            <Worktrees worktrees={snapshot.worktrees} now={now} />
+            {snapshot.features.jira && (
+              <JiraTickets
+                issues={snapshot.jira}
+                worktrees={snapshot.worktrees}
+                prs={snapshot.prs}
+                sessions={snapshot.sessions}
+                now={now}
+              />
+            )}
+            <MemoryCard notes={snapshot.memory} now={now} />
+          </div>
+          <div className="column">
+            <ProfileCard profile={snapshot.profile} />
+            <ContributionsCard contributions={snapshot.contributions} />
+            <UsageCard usage={snapshot.usage} now={now} />
+            <PullRequests prs={snapshot.prs} now={now} sessions={snapshot.sessions} />
+            {snapshot.features.reviewQueue && (
+              <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
+            )}
+            <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
+          </div>
         </div>
-        <div className="column">
-          <ProfileCard profile={snapshot.profile} />
-          <ContributionsCard contributions={snapshot.contributions} />
-          <UsageCard usage={snapshot.usage} now={now} />
-          <PullRequests prs={snapshot.prs} now={now} sessions={snapshot.sessions} />
-          {snapshot.features.reviewQueue && (
-            <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
-          )}
-          <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
-        </div>
-      </div>
-    </main>
+      </main>
+    </>
   )
 }
