@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Usage: ghostty-tab <dir> [session-id]
+#
+# Opens a new tab in the main Ghostty window, changes into <dir>, and, given a
+# session id, resumes that Claude Code session there. The main window is the
+# Ghostty window highest in the stacking order. Keystrokes are typed only after
+# the new tab is confirmed to have the focus; otherwise nothing is typed.
+# Without any Ghostty window, a new one opens in <dir> instead.
+#
+# DRY_RUN=1 prints what it would do without touching any window.
+
+set -uo pipefail
+
+dir="${1:?usage: ghostty-tab <dir> [session-id]}"
+session="${2:-}"
+
+[ -d "$dir" ] || { echo "No such directory: $dir" >&2; exit 2; }
+
+if [ -n "$session" ] && ! [[ "$session" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+	echo "Not a session id: $session" >&2
+	exit 2
+fi
+
+quoted=$(printf '%q' "$dir")
+command="cd $quoted"
+[ -n "$session" ] && command="$command && claude --resume $session"
+
+notify() {
+	command -v notify-send >/dev/null 2>&1 && notify-send "Claude console" "$1"
+	echo "$1" >&2
+}
+
+# Ghostty windows from bottom to top of the stack; the last one is on top.
+window=""
+for id in $(xprop -root _NET_CLIENT_LIST_STACKING 2>/dev/null | grep -o '0x[0-9a-f]*'); do
+	xprop -id "$id" WM_CLASS 2>/dev/null | grep -q 'com.mitchellh.ghostty' && window="$id"
+done
+
+if [ -n "${DRY_RUN:-}" ]; then
+	echo "window=${window:-none} command=$command"
+	exit 0
+fi
+
+if [ -z "$window" ]; then
+	setsid ghostty --working-directory="$dir" >/dev/null 2>&1 &
+	exit 0
+fi
+
+wmctrl -i -a "$window"
+xdotool windowactivate --sync "$window" 2>/dev/null
+sleep 0.15
+xdotool key --clearmodifiers ctrl+shift+t
+sleep 0.35
+
+active=$(xdotool getactivewindow 2>/dev/null)
+
+if [ "$((active))" != "$((window))" ] || ! xprop -id "$active" WM_CLASS 2>/dev/null | grep -q 'com.mitchellh.ghostty'; then
+	notify "Ghostty did not keep the focus, so nothing was typed. Run: $command"
+	exit 1
+fi
+
+xdotool type --clearmodifiers --delay 2 -- "$command"
+xdotool key --clearmodifiers Return

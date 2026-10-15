@@ -1,0 +1,29 @@
+{
+  "repo": "~/dev/projects/liferay-portal",
+  "brand": {
+    "title": "Claude Console",
+    "icon": "~/.config/claude-console/icon.svg"
+  },
+  "devServer": { "process": "webpack" },
+  "devEnv": {
+    "files": [
+      "workspaces/liferay-osbfaro-workspace/modules/osb-faro-web/.env",
+      "modules/dxp/apps/osb/osb-faro/osb-faro-web/.env"
+    ],
+    "key": "FARO_URL",
+    "rules": [
+      { "match": "-stg.", "name": "STG" },
+      { "match": "-internal.", "name": "INTERNAL" },
+      { "match": "ldp.liferay.com", "name": "PROD" },
+      { "match": "analytics.liferay.com", "name": "PROD" }
+    ]
+  },
+  "jira": { "site": "https://liferay.atlassian.net" },
+  "reviewQueue": {
+    "repo": "brianchandotcom/liferay-portal",
+    "reviewer": "brianchandotcom",
+    "name": "Brian",
+    "mergedPattern": "^merged\\b",
+    "branchSuffix": "-sender-{login}"
+  }
+}

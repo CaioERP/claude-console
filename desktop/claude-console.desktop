@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Console
+Comment=Worktrees, pull requests, CI and Claude sessions
+Exec=claude-console
+Icon=claude-console
+Terminal=false
+Categories=Development;
+StartupWMClass=ClaudeConsole
+X-GNOME-Autostart-enabled=true

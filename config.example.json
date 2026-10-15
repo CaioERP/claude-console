@@ -1,0 +1,11 @@
+{
+  "repo": "~/path/to/your/repository",
+  "brand": {
+    "title": "Claude Console",
+    "icon": ""
+  },
+  "devServer": { "process": "webpack" },
+  "devEnv": null,
+  "jira": null,
+  "reviewQueue": null
+}

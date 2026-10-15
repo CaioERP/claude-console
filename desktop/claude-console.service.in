@@ -1,0 +1,16 @@
+[Unit]
+Description=Claude Console dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+Environment=PATH=@PATH@
+EnvironmentFile=-%h/.config/claude-console/env
+ExecStartPre=@NODE@ node_modules/vite/bin/vite.js build --logLevel warn
+ExecStart=@NODE@ node_modules/vite/bin/vite.js preview --port 5178 --strictPort
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

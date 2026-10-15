@@ -1,0 +1,11 @@
+node_modules
+dist
+*.log
+.env
+.env.*
+!env.example
+config.json
+!config.example.json
+*.png
+*.jpg
+.playwright-mcp

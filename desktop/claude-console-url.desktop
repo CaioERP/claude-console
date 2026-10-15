@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Console link
+Comment=Opens claudeconsole:// links from the status line in the Claude console
+Exec=claude-console %u
+Icon=claude-console
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/claudeconsole;

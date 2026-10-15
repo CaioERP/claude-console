@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Usage: claude-console [session-id | claudeconsole://session/<session-id>]
+#
+# Opens the Claude console in its own app window, centered and sized to 80% of
+# the screen. Starts the server when it is not running yet, and only focuses the
+# window when one is already open, keeping wherever it was moved to. Given a
+# session, the console scrolls to it and highlights it: an open window is told
+# through the server, a new one opens with ?session=<id>.
+
+url="http://127.0.0.1:5178"
+class="ClaudeConsole"
+share=80
+
+session="${1:-}"
+session="${session#claudeconsole://session/}"
+session="${session%/}"
+
+if [ -n "$session" ] && ! [[ "$session" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+	echo "Not a session id: $session" >&2
+	session=""
+fi
+
+focus_session() {
+	[ -n "$session" ] || return 0
+	curl --fail --silent --output /dev/null --max-time 5 \
+		-X POST "$url/api/focus" \
+		-H 'Content-Type: application/json' \
+		-H 'X-Claude-Console: 1' \
+		-d "{\"session\":\"$session\"}"
+}
+
+if command -v wmctrl >/dev/null 2>&1 && wmctrl -x -a "$class" 2>/dev/null; then
+	focus_session
+	exit 0
+fi
+
+systemctl --user start claude-console.service
+
+for _ in $(seq 120); do
+	curl --fail --silent --output /dev/null "$url/" && break
+	sleep 0.5
+done
+
+page="$url/"
+
+browser=""
+
+for candidate in google-chrome google-chrome-stable chromium chromium-browser brave-browser microsoft-edge; do
+	command -v "$candidate" >/dev/null 2>&1 && { browser="$candidate"; break; }
+done
+[ -n "$session" ] && page="$url/?session=$session"
+
+read -r screen_w screen_h < <(xdotool getdisplaygeometry 2>/dev/null)
+
+geometry=()
+
+if [ -n "$screen_w" ] && [ -n "$screen_h" ]; then
+	w=$((screen_w * share / 100))
+	h=$((screen_h * share / 100))
+	x=$(((screen_w - w) / 2))
+	y=$(((screen_h - h) / 2))
+	geometry=(--window-size="$w,$h" --window-position="$x,$y")
+fi
+
+if [ -z "$browser" ]; then
+	# No Chromium-based browser for an app window: open a normal tab instead.
+	xdg-open "$page" >/dev/null 2>&1 &
+	exit 0
+fi
+
+setsid "$browser" \
+	--app="$page" \
+	--class="$class" \
+	--user-data-dir="$HOME/.local/share/claude-console/chrome" \
+	--no-default-browser-check \
+	--no-first-run \
+	"${geometry[@]}" \
+	>/dev/null 2>&1 &
+
+# Chrome restores a window's last bounds from its profile and may ignore the
+# flags above, so place the window again once it is mapped.
+if [ ${#geometry[@]} -gt 0 ] && command -v wmctrl >/dev/null 2>&1; then
+	for _ in $(seq 50); do
+		if wmctrl -lx | grep -q "\.$class "; then
+			wmctrl -x -r "$class" -b remove,maximized_vert,maximized_horz
+			wmctrl -x -r "$class" -e "0,$x,$y,$w,$h"
+			break
+		fi
+		sleep 0.2
+	done
+fi
