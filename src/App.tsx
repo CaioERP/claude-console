@@ -2727,6 +2727,9 @@ export const App = () => {
           </div>
         </div>
       </main>
+      <footer className="credit">
+        <a href="https://github.com/interaminense">@interaminense</a>
+      </footer>
     </>
   )
 }
