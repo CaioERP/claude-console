@@ -10,5 +10,7 @@
   "devEnv": null,
   "jira": null,
   "newSession": null,
+  "startWork": null,
+  "services": [],
   "reviewQueue": null
 }

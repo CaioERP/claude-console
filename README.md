@@ -74,7 +74,9 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 | `brand.title` | The name in the header and the window title. |
 | `brand.icon` | An SVG, PNG, ICO, WebP, or JPEG on this machine, shown before the title. Keep it outside the repository. |
 | `terminal` | The terminal the open and resume buttons use: `ghostty` (default) or `terminator`. |
-| `repo` (list) | `repo` also takes a list of repositories, and `CONSOLE_REPO` takes paths separated by `:`; each worktree then shows its repository. |
+| `repo` (list) | `repo` also takes a list of repositories, and `CONSOLE_REPO` takes paths separated by `:`; each worktree then shows its repository. An entry can be an object, `{ path, name, base: { remote, branch }, worktreesDir, prRepos }`: `name` labels its worktrees, `base` is the remote branch Start Work branches tickets from, `worktreesDir` (default `<path>-worktrees`) is where ticket worktrees go, and `prRepos` lists the GitHub repositories searched for a ticket's pull requests (default: those behind its remotes). |
+| `startWork` | `{ prompt }`: turns on **Start work** on Jira tickets. It asks for the repositories (each with a `base`), shows the git commands, creates `<worktreesDir>/<KEY>` on branch `<KEY>` (reusing a checkout already on it, an existing branch, or the fork's `origin/<KEY>`; new branches track nothing), and opens a Claude Code session in each with `prompt` as its first message, `{key}` replaced by the ticket's key, such as `"/start-ticket {key}"`. **Just start** opens the session in a repository's main checkout instead. |
+| `services` | `[{ name, file }]`: Docker Compose stacks shown in the **Services** panel, with Start (`docker compose -f <file> up -d`) and Stop (`docker compose -p <project> down`). A stack started from a worktree's copy of the file counts as the same stack. |
 | `devServer.process` | Text in a listening process's command line that marks it as a worktree's dev server. Default `webpack`. |
 | `devEnv` | `{ files, key, rules }`: the env files (relative to each worktree) that hold the URL its dev server talks to, the variable that holds it, and `{ match, name }` rules that name the environment by host, such as `{ "match": "-stg.", "name": "STG" }`. |
 | `jira` | `{ site, jql }`: your Jira Cloud site, like `https://example.atlassian.net`, and optionally the search. The default search is your open tickets. Requires `JIRA_API_USER` and `JIRA_API_TOKEN` in `~/.config/claude-console/env`. |
@@ -90,6 +92,8 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 - **Claude usage.** The 5-hour and 7-day rate-limit windows, today's tokens and cost, and a 14-day chart.
 - **Memory and artifacts.** The Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
 - **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.
+- **Tickets.** Each Jira ticket opens its own view (`?ticket=<KEY>`) with its description, its worktrees in every repository, every pull request that mentions it, open or closed, oldest first, and its Claude sessions. Worktree and session rows link back to their ticket.
+- **Services.** The configured Docker Compose stacks, the checkout each runs from, and a reminder when one stays up for 2 hours with no Claude session running.
 - **New sessions.** The **+** beside the session search starts a Claude Code session in a new Ghostty tab (see `newSession`), and **Start session here** in a worktree's menu starts an empty one in that worktree.
 - **Worktrees.** Grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console; `git worktree remove` runs without force, so uncommitted work is never lost.
 
