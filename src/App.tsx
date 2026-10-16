@@ -659,6 +659,41 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
 
   actions.push(copyAction('Copy session id', session.id))
 
+  if (session.isRunning) {
+    actions.push({
+      label: 'End session and close Ghostty tab…',
+      danger: true,
+      run: async () => {
+        const isSure = window.confirm(
+          `End the session "${session.name || session.id}" and close its Ghostty tab?\n\n` +
+            'Claude Code stops, and any reply in progress is lost. The conversation is saved, so you can resume it later. ' +
+            'The tab stays open if something else, such as a dev server, still runs in it.',
+        )
+
+        if (!isSure) return ''
+
+        const response = await fetch('/api/session/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+          body: JSON.stringify({ session: session.id }),
+        })
+        const body = (await response.json().catch(() => ({}))) as { note?: string; error?: string }
+
+        window.dispatchEvent(new Event('claude-console:refresh'))
+
+        if (!response.ok) {
+          window.alert(`The session was not ended:\n\n${body.error ?? 'Unknown error'}`)
+
+          return 'Not ended'
+        }
+
+        if (body.note && body.note.includes('kept its terminal')) window.alert(body.note)
+
+        return 'Ended'
+      },
+    })
+  }
+
   return actions
 }
 

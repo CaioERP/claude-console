@@ -6,6 +6,7 @@ import type { Plugin } from 'vite'
 import { config } from './config'
 import { getSnapshot, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
 import { isWindowAction, openExternally, openTerminal, windowAction } from './open'
+import { endSession } from './end'
 import { readBattery } from './system'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
@@ -146,6 +147,28 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (url.pathname === '/api/brand-icon') return handleIcon(res)
+
+  if (url.pathname === '/api/session/end') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { session } = JSON.parse(await readBody(req)) as { session?: string }
+
+      if (!session || !SESSION_ID.test(session)) throw new Error('Not a session id.')
+
+      res.end(JSON.stringify(await endSession(session)))
+    } catch (error) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
 
   if (url.pathname === '/api/system') {
     res.setHeader('Content-Type', 'application/json')
