@@ -7,6 +7,10 @@ describe('tabPlan', () => {
     expect(tabPlan('zsh', 'ghostty', [])).toEqual({ closeTab: true })
   })
 
+  it('closes the tab when Claude Code runs in a shell straight inside Terminator', () => {
+    expect(tabPlan('bash', 'terminator', [])).toEqual({ closeTab: true })
+  })
+
   it('keeps the tab when anything else still runs in the shell', () => {
     expect(tabPlan('zsh', 'ghostty', ['node'])).toEqual({ closeTab: false, reason: 'node still runs in it' })
   })

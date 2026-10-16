@@ -985,7 +985,7 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
           body: (
             <>
               <p className="modal-text">
-                <strong>{session.name || session.id}</strong> stops, and its Ghostty tab closes. Any reply in progress is lost.
+                <strong>{session.name || session.id}</strong> stops, and its terminal tab closes. Any reply in progress is lost.
               </p>
               <p className="modal-text">
                 The conversation is saved, so you can resume it later. The tab stays open if something else, such as a dev

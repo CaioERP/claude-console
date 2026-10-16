@@ -4,16 +4,16 @@ import { runningSessions } from './collect'
 import { procStartOf } from './pure'
 
 const SHELLS = new Set(['bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'nu'])
-const TERMINALS = new Set(['ghostty'])
+const TERMINALS = new Set(['ghostty', 'terminator'])
 
 export type TabPlan = { closeTab: true } | { closeTab: false; reason: string }
 
 // Whether ending a session may also close its terminal tab: only when Claude
-// Code runs straight in a shell that runs straight in Ghostty, and the shell
+// Code runs straight in a shell that runs straight in Ghostty or Terminator, and the shell
 // has nothing else running, such as a dev server, that closing would kill.
 export const tabPlan = (shell: string, terminal: string, others: string[]): TabPlan => {
   if (!SHELLS.has(shell)) return { closeTab: false, reason: `it runs under ${shell || 'an unknown process'}, not a shell` }
-  if (!TERMINALS.has(terminal)) return { closeTab: false, reason: `its shell runs in ${terminal || 'an unknown process'}, not Ghostty` }
+  if (!TERMINALS.has(terminal)) return { closeTab: false, reason: `its shell runs in ${terminal || 'an unknown process'}, not Ghostty or Terminator` }
   if (others.length > 0) return { closeTab: false, reason: `${others.join(', ')} still runs in it` }
 
   return { closeTab: true }
@@ -47,7 +47,7 @@ const waitForExit = async (pid: number, start: string, ms: number) => {
   return !(await isAlive(pid, start))
 }
 
-// Ends a running Claude Code session and closes the Ghostty tab it runs in.
+// Ends a running Claude Code session and closes the terminal tab it runs in.
 // The conversation stays on disk, so it can be resumed later.
 export const endSession = async (sessionId: string): Promise<{ closedTab: boolean; note: string }> => {
   const proc = (await runningSessions())?.get(sessionId)
@@ -79,5 +79,5 @@ export const endSession = async (sessionId: string): Promise<{ closedTab: boolea
 
   process.kill(claude.ppid, 'SIGHUP')
 
-  return { closedTab: true, note: 'Ended the session and closed its Ghostty tab.' }
+  return { closedTab: true, note: 'Ended the session and closed its terminal tab.' }
 }
