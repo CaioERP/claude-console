@@ -83,17 +83,36 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 
 - **Activity.** A contribution heatmap that combines GitHub contributions with Claude tool calls.
 - **Briefing.** What you did on your last working day, one line per Claude session with its recap, every pull request you opened, merged, or closed since yesterday, and the tickets in progress.
-- **Claude sessions.** Running and recent sessions with their worktree, branch, context use, cost, recap, and linked pull requests, read from `~/.claude/sessions`, `~/.claude/projects`, and the status line's snapshots.
-- **Window bar.** The console's name, the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
+- **Claude sessions.** Running and recent sessions with their worktree, branch, context use, cost, recap, and linked pull requests, read from `~/.claude/sessions`, `~/.claude/projects`, and the status line's snapshots. In a session:
+  - **Click the title to rename it.** Enter or a click outside keeps the name, Escape drops it, and an empty name goes back to the one Claude Code knows. The name shows only in the console: Claude Code keeps the name `/rename` gave it, which the console also reads from the transcript.
+  - **Add to favorites** in its menu stars it. Starred sessions show a yellow star and stay in the **Favorites** tab after they leave the recent ones, so you can still resume them; click the star to remove it.
+  - **End Session** in its menu, for a running session, stops Claude Code and closes its Ghostty tab, after asking. The conversation stays on disk to resume later, and the tab stays open when something else, such as a dev server, still runs in it.
 - **Claude usage.** The 5-hour and 7-day rate-limit windows, today's tokens and cost, and a 14-day chart.
+- **Jira tickets.** Your open tickets, linked to their worktree, pull request, and running sessions. A ticket without a worktree has a **+** that starts the `newSession` command with its key filled in.
 - **Memory and artifacts.** The Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
-- **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.
 - **New sessions.** The **+** beside the session search starts a Claude Code session in a new Ghostty tab (see `newSession`), and **Start session here** in a worktree's menu starts an empty one in that worktree.
-- **Worktrees.** Grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console; `git worktree remove` runs without force, so uncommitted work is never lost.
+- **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.
+- **Window bar.** The console's name, the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
+- **Worktrees.** Grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console, after asking; `git worktree remove` runs without force, so uncommitted work is never lost.
+
+## What It Stores
+
+Everything the console keeps stays on this machine, outside the repository:
+
+| Where | What |
+|---|---|
+| `~/.config/claude-console/config.json` | Your configuration. |
+| `~/.config/claude-console/env` (mode 600) | The Jira credentials, when Jira is on. |
+| `~/.config/claude-console/favorites.json` (mode 600) | The starred sessions: each one's id, name, branch, and folders, enough to list and resume it later. |
+| `~/.config/claude-console/names.json` (mode 600) | The names you gave sessions in the console, by session id. |
+| The page's browser storage | View preferences: the theme, the selected sessions tab, the Jira view, and the activity tab. |
+| `~/.local/share/claude-console/chrome` | The browser profile of the console's app window. |
+
+It never writes to `~/.claude` or to Claude Code's transcripts. To reset favorites or names, delete their file; the console treats a missing file as empty.
 
 ## Privacy
 
-The console stores nothing of its own beyond its configuration. It reads `~/.claude`, the watched repository, and the GitHub and Jira APIs with your credentials, and it serves the page only on `127.0.0.1`. Requests that change something (opening a link, opening a terminal, removing a worktree) must come from the console's own page. The page loads its fonts from Google Fonts.
+The console reads `~/.claude`, the watched repository, and the GitHub and Jira APIs with your credentials, and it serves the page only on `127.0.0.1`. Requests that change something (opening a link or a terminal, starting or ending a session, removing a worktree, starring or renaming a session) must come from the console's own page. The page loads its fonts from Google Fonts.
 
 ## Uninstall
 
@@ -101,7 +120,7 @@ The console stores nothing of its own beyond its configuration. It reads `~/.cla
 desktop/uninstall.sh
 ```
 
-This removes the service, launcher, menu entries, and link handler. It keeps your configuration in `~/.config/claude-console`.
+This removes the service, launcher, menu entries, and link handler. It keeps what the console stores (see [What It Stores](#what-it-stores)); delete `~/.config/claude-console` and `~/.local/share/claude-console` to remove that too.
 
 ## Develop
 
