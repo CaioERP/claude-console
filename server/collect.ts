@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process'
 import { open, readFile, readdir, readlink, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -8,6 +7,7 @@ import { collectContributions } from './activity'
 import { collectArtifacts } from './artifacts'
 import { collectProfile } from './profile'
 import { CONFIG_PATH, config, featuresOf } from './config'
+import { quiet, run } from './exec'
 import { collectJira } from './jira'
 import { collectMemory } from './memory'
 import { collectReviewQueue } from './queue'
@@ -127,23 +127,6 @@ const resumeDirOf = async (id: string, dir: string, top: string, launchDir = '')
 
 export const REPOS = config.repos
 
-const run = (cmd: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}) =>
-  new Promise<string>((resolve, reject) => {
-    execFile(
-      cmd,
-      args,
-      { cwd: options.cwd, timeout: options.timeoutMs ?? 20_000, maxBuffer: 32 * 1024 * 1024 },
-      (error, stdout, stderr) => (error ? reject(Object.assign(error, { stderr })) : resolve(stdout)),
-    )
-  })
-
-const quiet = async <T>(promise: Promise<T>, fallback: T): Promise<T> => {
-  try {
-    return await promise
-  } catch {
-    return fallback
-  }
-}
 
 const mapLimit = async <T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) => {
   const results = new Array<R>(items.length)
