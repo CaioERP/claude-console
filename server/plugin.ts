@@ -18,6 +18,7 @@ import { isWindowAction, openExternally, openTerminal, startSession, windowActio
 import { endSession } from './end'
 import { run } from './exec'
 import { executeStart, isTicketKey, planWorktree, readRepoState, startPrompt } from './startwork'
+import { servicesStatus, startStack, stopStack } from './services'
 import { ticketDetail } from './tickets'
 import { readBattery } from './system'
 
@@ -314,6 +315,34 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   if (url.pathname === '/api/terminal') return handleTerminal(req, res)
 
   if (url.pathname === '/api/worktree/remove') return handleRemoveWorktree(req, res)
+
+  if (url.pathname === '/api/services') {
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(JSON.stringify(await servicesStatus()))
+    return
+  }
+
+  if (url.pathname === '/api/services/start' || url.pathname === '/api/services/stop') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { name } = JSON.parse(await readBody(req)) as { name?: unknown }
+
+      await (url.pathname.endsWith('/start') ? startStack : stopStack)(String(name ?? ''))
+      res.end(JSON.stringify(await servicesStatus()))
+    } catch (error) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
 
   if (url.pathname === '/api/ticket') {
     res.setHeader('Content-Type', 'application/json')

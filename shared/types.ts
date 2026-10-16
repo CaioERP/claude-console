@@ -253,3 +253,20 @@ export type TicketDetail = {
   // Repositories whose pull requests could not be read, and why.
   prErrors: { repo: string; error: string }[]
 }
+
+export type ServiceContainer = { name: string; state: string; ports: string; startedAt: number | null }
+
+// A Docker Compose stack from the configuration, as Docker has it now.
+export type ServiceStack = {
+  name: string
+  state: 'up' | 'partial' | 'down'
+  // The compose project running it, and the folder it was started from.
+  project: string
+  workingDir: string
+  // Whether it runs from the configured file rather than a worktree's copy.
+  isOwnCheckout: boolean
+  containers: ServiceContainer[]
+  upSince: number | null
+}
+
+export type ServicesStatus = { available: boolean; reason: string; stacks: ServiceStack[] }
