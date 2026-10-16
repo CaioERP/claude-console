@@ -187,7 +187,10 @@ export const featuresOf = (c: ConsoleConfig): ConsoleFeatures => ({
         description: c.newSession.description,
       }
     : { needsInput: false, inputLabel: '', prompt: '', description: '' },
-  startWork: c.startWork ? { repos: c.repoConfigs.filter(r => r.base).map(r => r.name) } : null,
+  // Start Work needs at least one repository with a base; without one, the
+  // console keeps upstream's setup button.
+  startWork:
+    c.startWork && c.repoConfigs.some(r => r.base) ? { repos: c.repoConfigs.filter(r => r.base).map(r => r.name) } : null,
   services: c.services.length > 0,
 })
 

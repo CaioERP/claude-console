@@ -64,13 +64,25 @@ export const planWorktree = (key: string, repo: RepoConfig, state: RepoState): W
   }
 }
 
+type Git = (args: string[]) => Promise<string>
+
 // What git says about a repository right now, for planning a ticket's worktree.
-export const readRepoState = async (repo: RepoConfig, key: string): Promise<RepoState> => {
-  const git = (...args: string[]) => quiet(run('git', ['-C', repo.path, ...args]), '')
+// The ticket's branch is fetched from the fork first, so work pushed from
+// elsewhere is continued rather than replaced by a fresh branch.
+export const readRepoState = async (
+  repo: RepoConfig,
+  key: string,
+  git: Git = args => run('git', ['-C', repo.path, ...args], { timeoutMs: 60_000 }),
+): Promise<RepoState> => {
+  const read = (...args: string[]) => quiet(git(args), '')
+
+  // Fails quietly when the fork has no such branch, which is the usual case.
+  await read('fetch', 'origin', key)
+
   const [porcelain, local, fork, dirExists] = await Promise.all([
-    git('worktree', 'list', '--porcelain'),
-    git('branch', '--list', key, '--format=%(refname:short)'),
-    git('branch', '-r', '--list', `origin/${key}`, '--format=%(refname:short)'),
+    read('worktree', 'list', '--porcelain'),
+    read('branch', '--list', key, '--format=%(refname:short)'),
+    read('branch', '-r', '--list', `origin/${key}`, '--format=%(refname:short)'),
     stat(join(repo.worktreesDir, key)).then(
       () => true,
       () => false,

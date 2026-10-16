@@ -59,6 +59,7 @@ describe('resolveConfig', () => {
 
     expect(featuresOf(resolveConfig(values, {})).startWork).toEqual({ repos: ['B'] })
     expect(featuresOf(resolveConfig({ repo: '/home/dev/a' }, {})).startWork).toBeNull()
+    expect(featuresOf(resolveConfig({ repo: '/home/dev/a', startWork: { prompt: '/start {key}' } } as never, {})).startWork).toBeNull()
   })
 
   it('resolves services and drops entries without a name or file', () => {

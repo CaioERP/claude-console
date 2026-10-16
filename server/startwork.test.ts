@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { executeStart, isTicketKey, planWorktree, startPrompt } from './startwork'
+import { executeStart, isTicketKey, planWorktree, readRepoState, startPrompt } from './startwork'
 
 const repo = {
   path: '/home/dev/app',
@@ -126,5 +126,23 @@ describe('executeStart', () => {
 describe('startPrompt', () => {
   it('fills the key into the prompt', () => {
     expect(startPrompt('/start-ticket {key} now {key}', 'ABC-1')).toBe('/start-ticket ABC-1 now ABC-1')
+  })
+})
+
+describe('readRepoState', () => {
+  it('fetches the ticket branch from the fork before looking for it, so pushed work is found', async () => {
+    const calls: string[][] = []
+    const git = async (args: string[]) => {
+      calls.push(args)
+
+      if (args[0] === 'branch' && args[1] === '-r') return calls.some(c => c[0] === 'fetch') ? 'origin/ABC-1\n' : ''
+
+      return ''
+    }
+
+    const state = await readRepoState(repo, 'ABC-1', git)
+
+    expect(calls).toContainEqual(['fetch', 'origin', 'ABC-1'])
+    expect(state.forkBranches).toEqual(['ABC-1'])
   })
 })
