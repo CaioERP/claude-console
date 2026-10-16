@@ -1282,6 +1282,24 @@ h2 {
   flex-shrink: 0;
 }
 
+.favorite-star {
+  display: inline-grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #e3a008;
+  vertical-align: -0.12rem;
+}
+
+.favorite-star:hover:not(:disabled),
+.favorite-star:focus-visible {
+  color: #c27c00;
+  transform: scale(1.15);
+}
+
 .recap-button {
   display: inline-grid;
   place-items: center;
@@ -1331,10 +1349,46 @@ h2 {
 
 .session-name {
   min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
   font-weight: 500;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+}
+
+.session-name:hover {
+  text-decoration: underline dotted var(--ink-3);
+  text-underline-offset: 3px;
+}
+
+.session-name:focus-visible {
+  outline: 2px solid var(--bar);
+  outline-offset: 2px;
+}
+
+.session-name-field {
+  flex: 1;
+  min-width: 8rem;
+  max-width: 32rem;
+  margin: -0.2rem 0;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--bar);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+}
+
+.session-name-field:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--bar) 35%, transparent);
+  outline-offset: 0;
 }
 
 .session-name[data-auto='true'] {

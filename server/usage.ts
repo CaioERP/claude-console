@@ -117,8 +117,15 @@ const SCAN_DAYS = 40
 // The automatic title of a session, once a scan has read its transcript.
 export const titleOf = (sessionId: string) => titles.get(sessionId) ?? ''
 
+// The name the session was given with /rename, as its transcript records it.
+export const renamedOf = (sessionId: string) => customTitles.get(sessionId) ?? ''
+
 // How many responses a session's transcript holds, once a scan has read it.
 export const responsesOf = (sessionId: string) => responsesBySession.get(sessionId) ?? 0
+
+// When a session last wrote to its transcript, within the scanned days.
+export const lastSeenOf = (sessionId: string) =>
+  Math.max(0, ...[...(sessionDays.get(sessionId)?.values() ?? [])].map(day => day.lastAt))
 
 const emptyDay = (date: string): UsageDay => ({
   date,

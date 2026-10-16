@@ -3,15 +3,17 @@ import { open, readFile, readdir, readlink, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 
-import type { PullRequest, RecentPr, Session, Snapshot, Worktree } from '../shared/types'
+import type { FavoriteSession, PullRequest, RecentPr, Session, Snapshot, Worktree } from '../shared/types'
 import { collectContributions } from './activity'
+import { addFavorite, readFavorites, removeFavorite } from './favorites'
 import { collectArtifacts } from './artifacts'
 import { collectProfile } from './profile'
 import { CONFIG_PATH, config, featuresOf } from './config'
 import { collectJira } from './jira'
 import { collectMemory } from './memory'
 import { collectReviewQueue } from './queue'
-import { briefingOf, collectUsage, prUrlsOf, recapOf, responsesOf, titleOf } from './usage'
+import { briefingOf, collectUsage, lastSeenOf, prUrlsOf, recapOf, renamedOf, responsesOf, titleOf } from './usage'
+import { readNames, setName } from './names'
 import {
   DAY_MS,
   LIVE_SESSION_MS,
@@ -199,8 +201,8 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
 
           return {
             id,
-            name: name || titleOf(id),
-            isAutoTitle: !name && !!titleOf(id),
+            name: name || renamedOf(id) || titleOf(id),
+            isAutoTitle: !name && !renamedOf(id) && !!titleOf(id),
             responses: responsesOf(id),
             recap: recapOf(id).text,
             recapAt: recapOf(id).at,
@@ -238,8 +240,8 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
 
     sessions.push({
       id,
-      name: titleOf(id),
-      isAutoTitle: !!titleOf(id),
+      name: renamedOf(id) || titleOf(id),
+      isAutoTitle: !renamedOf(id) && !!titleOf(id),
       responses: responsesOf(id),
       recap: recapOf(id).text,
       recapAt: recapOf(id).at,
@@ -484,6 +486,9 @@ const state: Snapshot = {
   jiraAt: 0,
   queue: null,
   features: featuresOf(config),
+  favorites: [],
+  favoriteSessions: [],
+  names: {},
   contributions: null,
   memory: [],
   artifacts: [],
@@ -647,7 +652,93 @@ export const getSnapshot = async (options: { force?: boolean } = {}): Promise<Sn
     if (options.force) await job
   }
 
-  return { ...state, generatedAt: Date.now() }
+  const [favorites, names] = await Promise.all([readFavorites(), readNames()])
+  const named = (session: Session): Session =>
+    names[session.id] ? { ...session, name: names[session.id]!, claudeName: session.name, isAutoTitle: false } : session
+  const briefing = state.briefing && {
+    ...state.briefing,
+    sessions: state.briefing.sessions.map(s => (names[s.id] ? { ...s, title: names[s.id]! } : s)),
+  }
+
+  return {
+    ...state,
+    sessions: state.sessions.map(named),
+    briefing,
+    favorites: favorites.map(f => f.id),
+    favoriteSessions: favoriteSessionsOf(favorites, state.sessions).map(named),
+    names,
+    generatedAt: Date.now(),
+  }
+}
+
+// Gives a session a name in the console, or takes it away when name is empty.
+export const renameSession = async (id: string, name: string) => {
+  const known = state.sessions.some(s => s.id === id) || (await readFavorites()).some(f => f.id === id)
+
+  if (!known) throw new Error('This session is not listed in the console.')
+
+  return setName(id, name)
+}
+
+// Starred sessions no longer among the recent ones, as session rows: the name
+// and folders kept when starred, with the title, recap and last activity the
+// transcripts still hold.
+const favoriteSessionsOf = (favorites: FavoriteSession[], recent: Session[]): Session[] => {
+  const known = new Set(recent.map(s => s.id))
+
+  return favorites
+    .filter(f => !known.has(f.id))
+    .map(f => ({
+      id: f.id,
+      name: f.name || renamedOf(f.id) || titleOf(f.id),
+      isAutoTitle: !f.name && !renamedOf(f.id) && !!titleOf(f.id),
+      responses: responsesOf(f.id),
+      recap: recapOf(f.id).text,
+      recapAt: recapOf(f.id).at,
+      prUrls: prUrlsOf(f.id),
+      branch: f.branch,
+      model: '',
+      top: f.top,
+      dir: f.dir,
+      resumeDir: f.resumeDir,
+      ctx: 0,
+      h5: null,
+      h5Reset: '',
+      h5ResetAt: null,
+      d7: null,
+      d7ResetAt: null,
+      cost: null,
+      seenAt: lastSeenOf(f.id) || f.addedAt,
+      isLive: false,
+      isRunning: false,
+      runStatus: '',
+      runSince: 0,
+    }))
+}
+
+// Stars a session, keeping what is needed to list and resume it later, or
+// takes the star away. Returns the starred ids, newest first.
+export const setFavorite = async (id: string, isFavorite: boolean) => {
+  if (isFavorite) {
+    const favorites = await readFavorites()
+    const session = state.sessions.find(s => s.id === id) ?? favoriteSessionsOf(favorites, state.sessions).find(s => s.id === id)
+
+    if (!session) throw new Error('This session is not listed in the console.')
+
+    await addFavorite({
+      id,
+      name: session.isAutoTitle ? '' : session.name,
+      branch: session.branch,
+      top: session.top,
+      dir: session.dir,
+      resumeDir: session.resumeDir,
+      addedAt: Date.now(),
+    })
+  } else {
+    await removeFavorite(id)
+  }
+
+  return (await readFavorites()).map(f => f.id)
 }
 
 // Removes a dormant worktree's folder with `git worktree remove`, never forced:

@@ -945,6 +945,226 @@ const ActionMenu = ({ label, actions }: { label: string; actions: MenuAction[] }
   )
 }
 
+// The starred sessions' ids, newest first: set from each snapshot and right
+// after a star is added or taken away, so the change shows at once.
+let favoriteIds: string[] = []
+let favoritesChangedAt = 0
+const favoriteListeners = new Set<() => void>()
+
+const setFavoriteIds = (ids: string[]) => {
+  favoriteIds = ids
+  favoriteListeners.forEach(listener => listener())
+}
+
+// A snapshot taken before the last local change would undo it, so it is ignored.
+const syncFavorites = (ids: string[], generatedAt: number) => {
+  if (generatedAt < favoritesChangedAt || ids.join() === favoriteIds.join()) return
+
+  setFavoriteIds(ids)
+}
+
+const useFavorites = () =>
+  useSyncExternalStore(
+    listener => {
+      favoriteListeners.add(listener)
+
+      return () => favoriteListeners.delete(listener)
+    },
+    () => favoriteIds,
+  )
+
+const setFavorite = async (session: Session, isFavorite: boolean) => {
+  const response = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ session: session.id, isFavorite }),
+  }).catch(() => null)
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { favorites?: string[]; error?: string }
+
+  if (!response?.ok || !body.favorites) {
+    await showNotice(
+      isFavorite ? 'Not added to favorites' : 'Not removed from favorites',
+      <p className="modal-text">{body.error ?? 'The console did not answer.'}</p>,
+    )
+
+    return false
+  }
+
+  favoritesChangedAt = Date.now()
+  setFavoriteIds(body.favorites)
+
+  return true
+}
+
+const confirmUnfavorite = async (session: Session) => {
+  const isSure = await askConfirm({
+    title: 'Remove from favorites?',
+    body: (
+      <p className="modal-text">
+        <strong>{session.name || 'This session'}</strong> leaves your favorites. The session itself and its conversation
+        stay as they are.
+      </p>
+    ),
+    confirmLabel: 'Remove',
+  })
+
+  if (isSure) await setFavorite(session, false)
+}
+
+// The names given in the console, by session id: set from each snapshot and
+// right after a rename, so the new name shows at once.
+let sessionNames: Record<string, string> = {}
+let namesChangedAt = 0
+const nameListeners = new Set<() => void>()
+
+const setSessionNames = (names: Record<string, string>) => {
+  sessionNames = names
+  nameListeners.forEach(listener => listener())
+}
+
+const syncNames = (names: Record<string, string>, generatedAt: number) => {
+  if (generatedAt < namesChangedAt || JSON.stringify(names) === JSON.stringify(sessionNames)) return
+
+  setSessionNames(names)
+}
+
+const useSessionNames = () =>
+  useSyncExternalStore(
+    listener => {
+      nameListeners.add(listener)
+
+      return () => nameListeners.delete(listener)
+    },
+    () => sessionNames,
+  )
+
+const saveSessionName = async (id: string, name: string) => {
+  const previous = sessionNames
+  const next = { ...sessionNames }
+
+  if (name) next[id] = name
+  else delete next[id]
+
+  namesChangedAt = Date.now()
+  setSessionNames(next)
+
+  const response = await fetch('/api/session/name', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ session: id, name }),
+  }).catch(() => null)
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { names?: Record<string, string>; error?: string }
+
+  if (response?.ok && body.names) {
+    namesChangedAt = Date.now()
+    setSessionNames(body.names)
+
+    return
+  }
+
+  setSessionNames(previous)
+  await showNotice('The session was not renamed', <p className="modal-text">{body.error ?? 'The console did not answer.'}</p>)
+}
+
+// A session's title that turns into a field on click. Enter or a click
+// outside keeps the new name, Escape drops it, and an empty name (or Claude
+// Code's own) goes back to the name Claude Code knows.
+const SessionTitle = ({ session }: { session: Session }) => {
+  const names = useSessionNames()
+  const claudeName = session.claudeName ?? session.name
+  const given = names[session.id]
+  const shown = given ?? claudeName
+  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const isCancelled = useRef(false)
+  const field = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isEditing) return
+
+    field.current?.focus()
+    field.current?.select()
+  }, [isEditing])
+
+  const finish = () => {
+    setIsEditing(false)
+
+    if (isCancelled.current) return
+
+    const next = draft.replace(/\s+/g, ' ').trim()
+
+    if (next === shown) return
+
+    void saveSessionName(session.id, next === claudeName ? '' : next)
+  }
+
+  if (isEditing) {
+    return (
+      <input
+        ref={field}
+        className="session-name-field"
+        value={draft}
+        maxLength={120}
+        aria-label="Session name"
+        placeholder={claudeName || 'Session name'}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={finish}
+        onKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            field.current?.blur()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            isCancelled.current = true
+            field.current?.blur()
+          }
+        }}
+      />
+    )
+  }
+
+  const isEmpty = !shown && session.responses === 0
+
+  return (
+    <button
+      type="button"
+      className="session-name"
+      data-auto={!given && session.isAutoTitle}
+      data-empty={isEmpty}
+      data-given={!!given || undefined}
+      title={
+        given
+          ? `Named in the console${claudeName ? `; Claude Code calls it "${claudeName}"` : ''}. Click to rename.`
+          : session.isAutoTitle
+            ? 'Title Claude generated. Click to rename it here, or use /rename in the session.'
+            : isEmpty
+              ? 'Opened and closed without a conversation'
+              : 'Click to rename'
+      }
+      onClick={() => {
+        isCancelled.current = false
+        setDraft(shown)
+        setIsEditing(true)
+      }}
+    >
+      {shown || (session.responses === 0 ? 'Empty session' : 'Untitled session')}
+    </button>
+  )
+}
+
+const StarIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <path
+      d="M8 1.4l1.95 4.1 4.45.55-3.27 3.08.84 4.42L8 11.4l-3.97 2.15.84-4.42L1.6 6.05l4.45-.55z"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="0.8"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 const sessionActions = (session: Session, tree: Worktree | undefined): MenuAction[] => {
   const command = session.resumeDir ? resumeCommand(session) : ''
   const actions: MenuAction[] = [
@@ -974,6 +1194,12 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   }
 
   actions.push(copyAction('Copy session id', session.id))
+
+  actions.push(
+    favoriteIds.includes(session.id)
+      ? { label: 'Remove from favorites', run: async () => ((await setFavorite(session, false)) ? 'Removed' : '') }
+      : { label: 'Add to favorites', run: async () => ((await setFavorite(session, true)) ? 'Added to favorites' : '') },
+  )
 
   if (session.isRunning) {
     actions.push({
@@ -1704,25 +1930,24 @@ const SessionRow = ({
   const cost = current?.cost ?? base.cost
   const worktree = worktreeOf(session)
   const tree = worktrees.find(w => w.path === session.top)
+  const isFavorite = useFavorites().includes(session.id)
 
   return (
     <li className="session" id={`session-${session.id}`} data-live={session.isLive}>
       <span className="session-title">
-        <span
-          className="session-name"
-          data-auto={session.isAutoTitle}
-          data-empty={!session.name && session.responses === 0}
-          title={
-            session.isAutoTitle
-              ? 'Title Claude generated; rename the session with /rename'
-              : !session.name && session.responses === 0
-                ? 'Opened and closed without a conversation'
-                : undefined
-          }
-        >
-          {session.name || (session.responses === 0 ? 'Empty session' : 'Untitled session')}
-        </span>
+        <SessionTitle session={session} />
         {session.recap && <RecapButton recap={session.recap} recapAt={session.recapAt} now={now} />}
+        {isFavorite && (
+          <button
+            type="button"
+            className="favorite-star"
+            aria-label="Favorite; remove from favorites"
+            title="Favorite: click to remove"
+            onClick={() => void confirmUnfavorite(session)}
+          >
+            <StarIcon />
+          </button>
+        )}
       </span>
       <span className="ctx" title={`Context ${session.ctx}% used`}>
         <span className="ctx-bar">
@@ -1766,6 +1991,18 @@ const SessionRow = ({
   )
 }
 
+type SessionTab = 'all' | 'favorites'
+
+const SESSION_TAB_KEY = 'claude-console:sessions-tab'
+
+const readSessionTab = (): SessionTab => {
+  try {
+    return localStorage.getItem(SESSION_TAB_KEY) === 'favorites' ? 'favorites' : 'all'
+  } catch {
+    return 'all'
+  }
+}
+
 const Sessions = ({
   sessions,
   now,
@@ -1775,7 +2012,9 @@ const Sessions = ({
   artifacts,
   newSession,
   repo,
+  favoriteSessions,
 }: {
+  favoriteSessions: Session[]
   sessions: Session[]
   now: number
   worktrees: Worktree[]
@@ -1808,8 +2047,10 @@ const Sessions = ({
 
       if (reveal(id)) return
 
-      // Hidden by the search or among the earlier sessions: show them, then retry.
+      // Hidden by the search, the Favorites tab or among the earlier sessions:
+      // show them, then retry.
       setQuery('')
+      setTab('all')
       setShowAll(true)
       requestAnimationFrame(() => requestAnimationFrame(() => reveal(id)))
     }
@@ -1820,8 +2061,27 @@ const Sessions = ({
   }, [])
   const [showAll, setShowAll] = useState(false)
   const [query, setQuery] = useState('')
+  const [tab, setTab] = useState<SessionTab>(readSessionTab)
+  const favorites = useFavorites()
+  const starred = favorites
+    .map(id => sessions.find(s => s.id === id) ?? favoriteSessions.find(s => s.id === id))
+    .filter((s): s is Session => !!s)
   const isSearching = query.trim() !== ''
   const matching = sessions.filter(s => sessionMatches(s, query))
+
+  const chooseTab = (next: SessionTab) => {
+    setTab(next)
+
+    try {
+      localStorage.setItem(SESSION_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }
+
+  const row = (s: Session) => (
+    <SessionRow key={s.id} session={s} now={now} worktrees={worktrees} live={liveStatus} prs={prs} queue={queue} artifacts={artifacts} />
+  )
   const live = matching.filter(s => s.isLive)
   const rest = matching.filter(s => !s.isLive)
 
@@ -1829,6 +2089,21 @@ const Sessions = ({
     <section className="panel sessions" aria-labelledby="sessions-title">
       <header className="panel-head">
         <h2 id="sessions-title">Claude sessions</h2>
+        <div className="filters" role="tablist" aria-label="Sessions">
+          {(['all', 'favorites'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              aria-controls="sessions-tabpanel"
+              onClick={() => chooseTab(option)}
+            >
+              {option === 'all' ? 'Recent' : 'Favorites'}
+              {option === 'favorites' && <span className="count"> {starred.length}</span>}
+            </button>
+          ))}
+        </div>
         <input
           className="search"
           type="search"
@@ -1839,7 +2114,20 @@ const Sessions = ({
         />
         <NewSessionButton setup={newSession} repo={repo} />
       </header>
-      {isSearching ? (
+      <div id="sessions-tabpanel" role="tabpanel">
+      {tab === 'favorites' ? (
+        (() => {
+          const shown = starred.filter(s => sessionMatches(s, query))
+
+          return starred.length === 0 ? (
+            <p className="empty">No favorite yet. Star a session with Add to favorites in its ⋮ menu.</p>
+          ) : shown.length === 0 ? (
+            <p className="empty">No favorite matches that filter.</p>
+          ) : (
+            <ul className="session-list">{shown.map(row)}</ul>
+          )
+        })()
+      ) : isSearching ? (
         matching.length === 0 ? (
           <p className="empty">No session from the last day matches that filter.</p>
         ) : (
@@ -1901,6 +2189,7 @@ const Sessions = ({
           })()}
         </>
       )}
+      </div>
     </section>
   )
 }
@@ -3110,6 +3399,13 @@ export const App = () => {
   const title = snapshot?.features.title
 
   useEffect(() => {
+    if (!snapshot) return
+
+    syncFavorites(snapshot.favorites, snapshot.generatedAt)
+    syncNames(snapshot.names, snapshot.generatedAt)
+  }, [snapshot])
+
+  useEffect(() => {
     if (title) document.title = title
   }, [title])
 
@@ -3175,6 +3471,7 @@ export const App = () => {
               artifacts={snapshot.artifacts}
               newSession={snapshot.features.newSession}
               repo={snapshot.repo}
+              favoriteSessions={snapshot.favoriteSessions}
             />
             <Worktrees worktrees={snapshot.worktrees} now={now} />
             {snapshot.features.jira && (

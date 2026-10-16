@@ -4,7 +4,7 @@ import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
 import { config, newSessionPrompt } from './config'
-import { REPO, getSnapshot, isWorktreePath, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import { REPO, getSnapshot, isWorktreePath, renameSession, setFavorite, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
 import { readBattery } from './system'
@@ -173,6 +173,50 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     } catch (error) {
       res.statusCode = 400
       res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/session/name') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { session, name } = JSON.parse(await readBody(req)) as { session?: string; name?: string }
+
+      if (!session || !SESSION_ID.test(session)) throw new Error('Not a session id.')
+
+      res.end(JSON.stringify({ names: await renameSession(session, String(name ?? '')) }))
+    } catch (error) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/favorites') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { session, isFavorite } = JSON.parse(await readBody(req)) as { session?: string; isFavorite?: boolean }
+
+      if (!session || !SESSION_ID.test(session)) throw new Error('Not a session id.')
+
+      res.end(JSON.stringify({ favorites: await setFavorite(session, isFavorite !== false) }))
+    } catch (error) {
+      res.statusCode = 400
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
     }
     return

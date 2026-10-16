@@ -569,15 +569,16 @@ export const parseSessionRow = (line: string): { sessionId: string; at: number; 
   }
 }
 
+// The name a session was given with /rename: an "agent-name" row, which Claude
+// Code writes again as the session goes on, or the older "custom-title" row.
 export const parseCustomTitle = (line: string): { sessionId: string; title: string } | null => {
-  if (!line.includes('"custom-title"')) return null
+  if (!line.includes('"agent-name"') && !line.includes('"custom-title"')) return null
 
   try {
-    const row = JSON.parse(line) as { type?: string; sessionId?: string; customTitle?: string }
+    const row = JSON.parse(line) as { type?: string; sessionId?: string; customTitle?: string; agentName?: string }
+    const title = row.type === 'agent-name' ? row.agentName : row.type === 'custom-title' ? row.customTitle : ''
 
-    return row.type === 'custom-title' && row.sessionId && row.customTitle
-      ? { sessionId: row.sessionId, title: row.customTitle }
-      : null
+    return row.sessionId && title ? { sessionId: row.sessionId, title } : null
   } catch {
     return null
   }

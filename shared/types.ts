@@ -27,6 +27,20 @@ export type Session = {
   isRunning: boolean
   runStatus: string
   runSince: number
+  // The name Claude Code knows, when the console shows one you gave it instead.
+  claudeName?: string
+}
+
+// What is kept of a starred session, enough to list and resume it after its
+// snapshot is gone.
+export type FavoriteSession = {
+  id: string
+  name: string
+  branch: string
+  top: string
+  dir: string
+  resumeDir: string
+  addedAt: number
 }
 
 export type LiveStatus = Record<string, { status: string; since: number; agents: number; cost: number | null }>
@@ -215,6 +229,12 @@ export type Snapshot = {
   jiraAt: number
   queue: ReviewQueue | null
   features: ConsoleFeatures
+  // The ids of the starred sessions, newest first, and those no longer among
+  // the recent sessions, rebuilt from what was kept.
+  favorites: string[]
+  favoriteSessions: Session[]
+  // The names given in the console, by session id.
+  names: Record<string, string>
   contributions: Contributions | null
   memory: MemoryNote[]
   artifacts: PublishedArtifact[]
