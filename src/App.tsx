@@ -661,7 +661,7 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
 
   if (session.isRunning) {
     actions.push({
-      label: 'End session and close Ghostty tab…',
+      label: 'End Session',
       danger: true,
       run: async () => {
         const isSure = window.confirm(
