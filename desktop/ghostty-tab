@@ -5,7 +5,7 @@
 # session id, resumes that Claude Code session there. The main window is the
 # Ghostty window highest in the stacking order. Keystrokes are typed only after
 # the new tab is confirmed to have the focus; otherwise nothing is typed.
-# Without any Ghostty window, a new one opens in <dir> instead.
+# Without any Ghostty window, a new one opens in <dir>, resuming the session there.
 #
 # DRY_RUN=1 prints what it would do without touching any window.
 
@@ -36,13 +36,25 @@ for id in $(xprop -root _NET_CLIENT_LIST_STACKING 2>/dev/null | grep -o '0x[0-9a
 	xprop -id "$id" WM_CLASS 2>/dev/null | grep -q 'com.mitchellh.ghostty' && window="$id"
 done
 
+# Without a Ghostty window there is no tab to type into, so a new window starts
+# in <dir> and, given a session, resumes it in the person's interactive shell
+# (for their PATH), falling back to that shell when Claude Code exits.
+user_shell="${SHELL:-$(getent passwd "$(id -un)" | cut -d: -f7)}"
+user_shell="${user_shell:-/bin/bash}"
+launch=(ghostty --working-directory="$dir")
+[ -n "$session" ] && launch+=(-e "$user_shell" -ic "claude --resume $session; exec $(printf '%q' "$user_shell") -i")
+
 if [ -n "${DRY_RUN:-}" ]; then
-	echo "window=${window:-none} command=$command"
+	if [ -n "$window" ]; then
+		echo "window=$window command=$command"
+	else
+		echo "window=none launch=$(printf '%q ' "${launch[@]}")"
+	fi
 	exit 0
 fi
 
 if [ -z "$window" ]; then
-	setsid ghostty --working-directory="$dir" >/dev/null 2>&1 &
+	setsid "${launch[@]}" >/dev/null 2>&1 &
 	exit 0
 fi
 
