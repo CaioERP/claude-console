@@ -183,6 +183,11 @@ export const StartWorkButton = ({ issueKey, repos, isSmall = false }: { issueKey
               </ul>
             </>
           )}
+          {isBusy && step.kind !== 'confirm' && (
+            <p className="modal-hint" role="status">
+              Fetching and checking the repositories…
+            </p>
+          )}
           {error && (
             <p className="modal-hint" role="alert">
               {error}

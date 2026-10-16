@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 import type {
   Battery,
@@ -592,7 +593,9 @@ export const Modal = ({
     }
   }, [])
 
-  return (
+  // Rendered on the body, so a button inside a scrolling, masked or hovered
+  // card can't trap the full-screen backdrop inside that card.
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={event => {
@@ -606,7 +609,8 @@ export const Modal = ({
         <div className="modal-body">{children}</div>
         <div className="modal-actions">{actions}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
