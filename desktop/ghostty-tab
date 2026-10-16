@@ -1,29 +1,49 @@
 #!/usr/bin/env bash
 # Usage: ghostty-tab <dir> [session-id]
+#        ghostty-tab --new <dir> [prompt]
 #
-# Opens a new tab in the main Ghostty window, changes into <dir>, and, given a
-# session id, resumes that Claude Code session there. The main window is the
-# Ghostty window highest in the stacking order. Keystrokes are typed only after
-# the new tab is confirmed to have the focus; otherwise nothing is typed.
-# Without any Ghostty window, a new one opens in <dir>, resuming the session there.
+# Opens a new tab in the main Ghostty window and changes into <dir>. Given a
+# session id, it resumes that Claude Code session there; with --new, it starts
+# a new Claude Code session, sending [prompt] as its first message. The main
+# window is the Ghostty window highest in the stacking order. Keystrokes are
+# typed only after the new tab is confirmed to have the focus; otherwise nothing
+# is typed. Without any Ghostty window, a new one opens in <dir> and runs the
+# same command there.
 #
 # DRY_RUN=1 prints what it would do without touching any window.
 
 set -uo pipefail
 
-dir="${1:?usage: ghostty-tab <dir> [session-id]}"
-session="${2:-}"
+usage="usage: ghostty-tab <dir> [session-id] | ghostty-tab --new <dir> [prompt]"
+is_new=false
+
+if [ "${1:-}" = "--new" ]; then
+	is_new=true
+	shift
+fi
+
+dir="${1:?$usage}"
+second="${2:-}"
 
 [ -d "$dir" ] || { echo "No such directory: $dir" >&2; exit 2; }
 
-if [ -n "$session" ] && ! [[ "$session" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-	echo "Not a session id: $session" >&2
-	exit 2
+claude_command=""
+
+if $is_new; then
+	claude_command="claude"
+	[ -n "$second" ] && claude_command="claude $(printf '%q' "$second")"
+elif [ -n "$second" ]; then
+	if ! [[ "$second" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+		echo "Not a session id: $second" >&2
+		exit 2
+	fi
+
+	claude_command="claude --resume $second"
 fi
 
 quoted=$(printf '%q' "$dir")
 command="cd $quoted"
-[ -n "$session" ] && command="$command && claude --resume $session"
+[ -n "$claude_command" ] && command="$command && $claude_command"
 
 notify() {
 	command -v notify-send >/dev/null 2>&1 && notify-send "Claude console" "$1"
@@ -37,12 +57,12 @@ for id in $(xprop -root _NET_CLIENT_LIST_STACKING 2>/dev/null | grep -o '0x[0-9a
 done
 
 # Without a Ghostty window there is no tab to type into, so a new window starts
-# in <dir> and, given a session, resumes it in the person's interactive shell
+# in <dir> and runs the Claude Code command, if any, in the person's interactive shell
 # (for their PATH), falling back to that shell when Claude Code exits.
 user_shell="${SHELL:-$(getent passwd "$(id -un)" | cut -d: -f7)}"
 user_shell="${user_shell:-/bin/bash}"
 launch=(ghostty --working-directory="$dir")
-[ -n "$session" ] && launch+=(-e "$user_shell" -ic "claude --resume $session; exec $(printf '%q' "$user_shell") -i")
+[ -n "$claude_command" ] && launch+=(-e "$user_shell" -ic "$claude_command; exec $(printf '%q' "$user_shell") -i")
 
 if [ -n "${DRY_RUN:-}" ]; then
 	if [ -n "$window" ]; then

@@ -24,6 +24,10 @@ export type ConsoleConfig = {
   devEnv: { files: string[]; key: string; rules: EnvRule[] } | null
   // Jira Cloud. Credentials come from JIRA_API_USER and JIRA_API_TOKEN.
   jira: { site: string; jql: string } | null
+  // What the "+" beside the session search starts: a Claude Code session in the
+  // repository whose first message is `prompt`, with {input} replaced by what
+  // you type (a ticket or a name). Without it, the "+" starts an empty session.
+  newSession: { prompt: string; inputLabel: string; description: string } | null
   // A reviewer's queue that your pull requests are forwarded to, read with gh.
   reviewQueue: {
     // The repository the forwarded pull requests are opened in.
@@ -46,6 +50,7 @@ const DEFAULTS: ConsoleConfig = {
   devServer: { process: 'webpack' },
   devEnv: null,
   jira: null,
+  newSession: null,
   reviewQueue: null,
 }
 
@@ -82,6 +87,13 @@ export const resolveConfig = (values: Partial<ConsoleConfig>, env: NodeJS.Proces
     jira: values.jira?.site
       ? { site: values.jira.site.replace(/\/+$/, ''), jql: values.jira.jql || DEFAULT_JQL }
       : null,
+    newSession: values.newSession?.prompt
+      ? {
+          prompt: values.newSession.prompt,
+          inputLabel: values.newSession.inputLabel || 'Name',
+          description: values.newSession.description || '',
+        }
+      : null,
     reviewQueue: values.reviewQueue?.repo && values.reviewQueue.reviewer
       ? {
           repo: values.reviewQueue.repo,
@@ -105,4 +117,27 @@ export const featuresOf = (c: ConsoleConfig): ConsoleFeatures => ({
   hasIcon: !!c.brand.icon,
   jira: !!c.jira,
   reviewQueue: c.reviewQueue ? { name: c.reviewQueue.name, repo: c.reviewQueue.repo } : null,
+  newSession: c.newSession
+    ? {
+        needsInput: c.newSession.prompt.includes('{input}'),
+        inputLabel: c.newSession.inputLabel,
+        prompt: c.newSession.prompt,
+        description: c.newSession.description,
+      }
+    : { needsInput: false, inputLabel: '', prompt: '', description: '' },
 })
+
+// What a new session's first message is: the configured prompt with {input}
+// filled in. Input is limited to the characters of a ticket or a name, so what
+// reaches the terminal is never more than that.
+export const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
+
+export const newSessionPrompt = (c: ConsoleConfig, input: string) => {
+  if (!c.newSession) return ''
+
+  if (!c.newSession.prompt.includes('{input}')) return c.newSession.prompt
+
+  if (!INPUT_PATTERN.test(input)) throw new Error('Use only letters, numbers, ".", "-" and "_", up to 80 characters.')
+
+  return c.newSession.prompt.replaceAll('{input}', input)
+}

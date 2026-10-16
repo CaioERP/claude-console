@@ -4,7 +4,9 @@
     "title": "Claude Console",
     "icon": "~/.config/claude-console/icon.svg"
   },
-  "devServer": { "process": "webpack" },
+  "devServer": {
+    "process": "webpack"
+  },
   "devEnv": {
     "files": [
       "workspaces/liferay-osbfaro-workspace/modules/osb-faro-web/.env",
@@ -12,13 +14,32 @@
     ],
     "key": "FARO_URL",
     "rules": [
-      { "match": "-stg.", "name": "STG" },
-      { "match": "-internal.", "name": "INTERNAL" },
-      { "match": "ldp.liferay.com", "name": "PROD" },
-      { "match": "analytics.liferay.com", "name": "PROD" }
+      {
+        "match": "-stg.",
+        "name": "STG"
+      },
+      {
+        "match": "-internal.",
+        "name": "INTERNAL"
+      },
+      {
+        "match": "ldp.liferay.com",
+        "name": "PROD"
+      },
+      {
+        "match": "analytics.liferay.com",
+        "name": "PROD"
+      }
     ]
   },
-  "jira": { "site": "https://liferay.atlassian.net" },
+  "jira": {
+    "site": "https://liferay.atlassian.net"
+  },
+  "newSession": {
+    "prompt": "/setup-faro-worktree {input}",
+    "inputLabel": "Ticket or name",
+    "description": "Creates an osb-faro-web worktree off upstream/master, starts its webpack dev server, and opens a Claude session in it that asks what the worktree is for."
+  },
   "reviewQueue": {
     "repo": "brianchandotcom/liferay-portal",
     "reviewer": "brianchandotcom",

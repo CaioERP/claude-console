@@ -675,6 +675,15 @@ export const removeDormantWorktree = async (path: string) => {
   await refreshWorktrees()
 }
 
+// Whether a path is one of the repository's worktrees, as git lists them now.
+export const isWorktreePath = async (path: string) => {
+  if (!REPO) return false
+
+  const porcelain = await quiet(run('git', ['-C', REPO, 'worktree', 'list', '--porcelain']), '')
+
+  return parseWorktreePorcelain(porcelain).some(entry => entry.path === path)
+}
+
 // The cost the status line last reported for a session, in US dollars.
 export const sessionCost = async (sessionId: string): Promise<number | null> => {
   try {

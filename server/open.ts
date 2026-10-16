@@ -50,6 +50,19 @@ export const openTerminal = async (dir: string, session = '') => {
   child.unref()
 }
 
+// Opens a new tab in the main Ghostty window inside dir and starts a new Claude
+// Code session there, with prompt as its first message when given.
+export const startSession = async (dir: string, prompt = '') => {
+  if (!isAbsolute(dir) || !(await stat(dir).then(s => s.isDirectory(), () => false))) {
+    throw new Error(`Not a directory: ${dir}`)
+  }
+
+  const env = { ...process.env, ...(await desktopEnv()) }
+  const child = spawn(GHOSTTY_TAB, ['--new', dir, ...(prompt ? [prompt] : [])], { env, detached: true, stdio: 'ignore' })
+
+  child.unref()
+}
+
 // Opens a link with the person's default browser and profile, outside the
 // console's own app window.
 export const openExternally = async (url: string) => {

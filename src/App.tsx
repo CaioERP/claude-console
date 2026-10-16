@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type {
   Battery,
@@ -504,6 +504,322 @@ const ghosttyAction = (label: string, dir: string, session?: string): MenuAction
   run: async () => ((await openTab(dir, session).catch(() => false)) ? 'Opened in Ghostty' : 'Could not open Ghostty'),
 })
 
+// Starts a new Claude Code session in a new Ghostty tab: an empty one in a
+// worktree, or the configured one in the repository.
+const startSession = async (body: { dir?: string; input?: string }): Promise<true | string> => {
+  const response = await fetch('/api/session/new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify(body),
+  }).catch(() => null)
+
+  if (response?.ok) return true
+
+  const { error } = ((await response?.json().catch(() => ({}))) ?? {}) as { error?: string }
+
+  return error ?? 'Could not start the session.'
+}
+
+const PlusIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+  </svg>
+)
+
+const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])'
+
+// A modal window over the page: it takes the focus and keeps Tab inside it,
+// closes on Escape or a click outside, and gives the focus back on closing.
+const Modal = ({
+  title,
+  children,
+  actions,
+  onClose,
+}: {
+  title: string
+  children: ReactNode
+  actions: ReactNode
+  onClose: () => void
+}) => {
+  const panel = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  const titleId = useId()
+
+  close.current = onClose
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const focusables = () => [...(panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])]
+
+    ;(panel.current?.querySelector<HTMLElement>('[data-autofocus]') ?? focusables()[0])?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        close.current()
+      } else if (event.key === 'Tab') {
+        const list = focusables()
+        const first = list[0]
+        const last = list[list.length - 1]
+
+        if (!first || !last) return
+
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+    }
+
+    const overflow = document.body.style.overflow
+
+    document.addEventListener('keydown', onKeyDown, true)
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      document.body.style.overflow = overflow
+      previous?.focus?.()
+    }
+  }, [])
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) close.current()
+      }}
+    >
+      <div ref={panel} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <h2 id={titleId} className="modal-title">
+          {title}
+        </h2>
+        <div className="modal-body">{children}</div>
+        <div className="modal-actions">{actions}</div>
+      </div>
+    </div>
+  )
+}
+
+type ConfirmRequest = {
+  title: string
+  body: ReactNode
+  confirmLabel: string
+  // null for a notice with a single button.
+  cancelLabel?: string | null
+  isDanger?: boolean
+  resolve: (isConfirmed: boolean) => void
+}
+
+const CONFIRM_EVENT = 'claude-console:confirm'
+
+// Asks in a modal, the way window.confirm does, and resolves with the answer.
+const askConfirm = (request: Omit<ConfirmRequest, 'resolve'>) =>
+  new Promise<boolean>(resolve => window.dispatchEvent(new CustomEvent(CONFIRM_EVENT, { detail: { ...request, resolve } })))
+
+const showNotice = async (title: string, body: ReactNode) => {
+  await askConfirm({ title, body, confirmLabel: 'OK', cancelLabel: null })
+}
+
+// Shows the requests askConfirm makes, one at a time.
+const ConfirmHost = () => {
+  const [request, setRequest] = useState<ConfirmRequest | null>(null)
+
+  useEffect(() => {
+    const onRequest = (event: Event) => setRequest((event as CustomEvent<ConfirmRequest>).detail)
+
+    window.addEventListener(CONFIRM_EVENT, onRequest)
+
+    return () => window.removeEventListener(CONFIRM_EVENT, onRequest)
+  }, [])
+
+  if (!request) return null
+
+  const answer = (isConfirmed: boolean) => {
+    request.resolve(isConfirmed)
+    setRequest(null)
+  }
+  const cancelLabel = request.cancelLabel === undefined ? 'Cancel' : request.cancelLabel
+
+  return (
+    <Modal
+      title={request.title}
+      onClose={() => answer(false)}
+      actions={
+        <>
+          {cancelLabel && (
+            <button type="button" onClick={() => answer(false)} data-autofocus={request.isDanger || undefined}>
+              {cancelLabel}
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary"
+            data-danger={request.isDanger || undefined}
+            data-autofocus={!request.isDanger || undefined}
+            onClick={() => answer(true)}
+          >
+            {request.confirmLabel}
+          </button>
+        </>
+      }
+    >
+      {request.body}
+    </Modal>
+  )
+}
+
+const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
+
+// The "+" beside the session search. It opens a modal that says what will be
+// created, asks for a ticket or a name when the configured first message needs
+// one, and starts the Claude Code session in a new Ghostty tab on confirming.
+const NewSessionButton = ({
+  setup,
+  repo,
+  initialInput = '',
+  label = 'Start a new Claude session',
+  isSmall = false,
+}: {
+  setup: Snapshot['features']['newSession']
+  repo: string
+  // Fills the ticket or name in, such as a Jira ticket's key.
+  initialInput?: string
+  label?: string
+  isSmall?: boolean
+}) => {
+  const [isOpen, setIsOpen] = useState(false)
+  const [input, setInput] = useState(initialInput)
+  const [error, setError] = useState('')
+  const [isStarting, setIsStarting] = useState(false)
+  const [note, setNote] = useState('')
+  const value = input.trim()
+  const isValid = !setup.needsInput || INPUT_PATTERN.test(value)
+  const prompt = setup.prompt.replaceAll('{input}', value || `<${setup.inputLabel.toLowerCase()}>`)
+
+  useEffect(() => {
+    if (!note) return
+
+    const timer = setTimeout(() => setNote(''), 4_000)
+
+    return () => clearTimeout(timer)
+  }, [note])
+
+  const close = () => {
+    setIsOpen(false)
+    setInput(initialInput)
+    setError('')
+  }
+
+  const start = async () => {
+    if (!isValid || isStarting) return
+
+    setIsStarting(true)
+
+    const outcome = await startSession(setup.needsInput ? { input: value } : {})
+
+    setIsStarting(false)
+
+    if (outcome === true) {
+      close()
+      setNote('Started in Ghostty')
+    } else {
+      setError(outcome)
+    }
+  }
+
+  return (
+    <div className="new-session" data-small={isSmall || undefined}>
+      {note && (
+        <span className="menu-note" role="status">
+          {note}
+        </span>
+      )}
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={label}
+        title={label}
+        aria-haspopup="dialog"
+        onClick={() => {
+          setInput(initialInput)
+          setIsOpen(true)
+        }}
+      >
+        <PlusIcon />
+      </button>
+      {isOpen && (
+        <Modal
+          title="New Claude session"
+          onClose={close}
+          actions={
+            <>
+              <button type="button" onClick={close}>
+                Cancel
+              </button>
+              <button type="submit" form="new-session-form" className="primary" disabled={!isValid || isStarting}>
+                {isStarting ? 'Starting…' : 'Start session'}
+              </button>
+            </>
+          }
+        >
+          <form
+            id="new-session-form"
+            className="modal-form"
+            onSubmit={event => {
+              event.preventDefault()
+              void start()
+            }}
+          >
+            <p className="modal-text">
+              {setup.description || 'Starts a new Claude Code session in the repository.'} It opens in a new Ghostty tab.
+            </p>
+            {setup.needsInput && (
+              <label className="modal-field">
+                <span>{setup.inputLabel}</span>
+                <input
+                  data-autofocus
+                  value={input}
+                  onChange={event => {
+                    setInput(event.target.value)
+                    setError('')
+                  }}
+                  aria-invalid={value !== '' && !isValid}
+                  aria-describedby="new-session-hint"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <span id="new-session-hint" className="modal-hint">
+                  Letters, numbers, <code>.</code> <code>-</code> <code>_</code>, such as <code>LPD-12345</code>.
+                </span>
+              </label>
+            )}
+            <dl className="modal-preview">
+              <dt>Folder</dt>
+              <dd>
+                <code>{repo}</code>
+              </dd>
+              <dt>Runs</dt>
+              <dd>
+                <code>{prompt ? `claude "${prompt}"` : 'claude'}</code>
+              </dd>
+            </dl>
+            {error && (
+              <p className="modal-error" role="alert">
+                {error}
+              </p>
+            )}
+          </form>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 const KebabIcon = () => (
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
     <circle cx="8" cy="3" r="1.5" fill="currentColor" />
@@ -664,11 +980,22 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
       label: 'End Session',
       danger: true,
       run: async () => {
-        const isSure = window.confirm(
-          `End the session "${session.name || session.id}" and close its Ghostty tab?\n\n` +
-            'Claude Code stops, and any reply in progress is lost. The conversation is saved, so you can resume it later. ' +
-            'The tab stays open if something else, such as a dev server, still runs in it.',
-        )
+        const isSure = await askConfirm({
+          title: 'End this session?',
+          body: (
+            <>
+              <p className="modal-text">
+                <strong>{session.name || session.id}</strong> stops, and its Ghostty tab closes. Any reply in progress is lost.
+              </p>
+              <p className="modal-text">
+                The conversation is saved, so you can resume it later. The tab stays open if something else, such as a dev
+                server, still runs in it.
+              </p>
+            </>
+          ),
+          confirmLabel: 'End Session',
+          isDanger: true,
+        })
 
         if (!isSure) return ''
 
@@ -682,12 +1009,14 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
         window.dispatchEvent(new Event('claude-console:refresh'))
 
         if (!response.ok) {
-          window.alert(`The session was not ended:\n\n${body.error ?? 'Unknown error'}`)
+          await showNotice('The session was not ended', <p className="modal-text">{body.error ?? 'Unknown error'}</p>)
 
           return 'Not ended'
         }
 
-        if (body.note && body.note.includes('kept its terminal')) window.alert(body.note)
+        if (body.note && body.note.includes('kept its terminal')) {
+          await showNotice('Session ended', <p className="modal-text">{body.note}</p>)
+        }
 
         return 'Ended'
       },
@@ -697,8 +1026,36 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   return actions
 }
 
+// The worktrees being deleted right now, shared by the menu action that starts
+// a deletion and the rows that show it.
+const deletingWorktrees = new Set<string>()
+const deletingListeners = new Set<() => void>()
+
+const setDeleting = (path: string, isDeleting: boolean) => {
+  if (isDeleting) deletingWorktrees.add(path)
+  else deletingWorktrees.delete(path)
+
+  deletingListeners.forEach(listener => listener())
+}
+
+const useIsDeleting = (path: string) =>
+  useSyncExternalStore(
+    listener => {
+      deletingListeners.add(listener)
+
+      return () => deletingListeners.delete(listener)
+    },
+    () => deletingWorktrees.has(path),
+  )
+
 const worktreeActions = (worktree: Worktree): MenuAction[] => {
-  const actions: MenuAction[] = [ghosttyAction('Open in Ghostty', worktree.path)]
+  const actions: MenuAction[] = [
+    {
+      label: 'Start session here',
+      run: async () => ((await startSession({ dir: worktree.path })) === true ? 'Started in Ghostty' : 'Could not start'),
+    },
+    ghosttyAction('Open in Ghostty', worktree.path),
+  ]
 
   if (worktree.devServerPort) {
     actions.push({
@@ -722,28 +1079,59 @@ const worktreeActions = (worktree: Worktree): MenuAction[] => {
           ? 'A Claude session runs in it'
           : undefined,
       run: async () => {
-        const branch = worktree.branch ? `The branch ${worktree.branch} and its commits stay.` : ''
-        const isSure = window.confirm(
-          `Delete the worktree ${worktree.name}?\n\nThis removes the folder ${worktree.path}. ${branch}\n` +
-            'Git refuses if the worktree holds uncommitted or untracked files, so no unsaved work is lost.',
-        )
+        const isSure = await askConfirm({
+          title: 'Delete this worktree?',
+          body: (
+            <>
+              <p className="modal-text">
+                This removes the folder of <strong>{worktree.name}</strong>.
+                {worktree.branch && (
+                  <>
+                    {' '}
+                    The branch <code>{worktree.branch}</code> and its commits stay.
+                  </>
+                )}
+              </p>
+              <p className="modal-text">
+                Git refuses when the worktree holds uncommitted or untracked files, so no unsaved work is lost.
+              </p>
+              <dl className="modal-preview">
+                <dt>Folder</dt>
+                <dd>
+                  <code>{worktree.path}</code>
+                </dd>
+              </dl>
+            </>
+          ),
+          confirmLabel: 'Delete worktree',
+          isDanger: true,
+        })
 
         if (!isSure) return ''
+
+        setDeleting(worktree.path, true)
 
         const response = await fetch('/api/worktree/remove', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
           body: JSON.stringify({ path: worktree.path }),
-        })
+        }).catch(() => null)
 
-        if (response.ok) {
+        if (response?.ok) {
+          // The row leaves with the next snapshot; until then it stays marked.
           window.dispatchEvent(new Event('claude-console:refresh'))
+          setTimeout(() => setDeleting(worktree.path, false), 30_000)
 
           return 'Deleted'
         }
 
-        const { error } = (await response.json().catch(() => ({ error: 'Unknown error' }))) as { error?: string }
-        window.alert(`The worktree ${worktree.name} was not deleted:\n\n${error}`)
+        setDeleting(worktree.path, false)
+
+        const { error } = ((await response?.json().catch(() => null)) ?? { error: 'The console did not answer.' }) as {
+          error?: string
+        }
+
+        await showNotice('The worktree was not deleted', <p className="modal-text">{error ?? 'Unknown error'}</p>)
 
         return 'Not deleted'
       },
@@ -755,12 +1143,18 @@ const worktreeActions = (worktree: Worktree): MenuAction[] => {
 
 const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => {
   const live = worktree.sessions.filter(s => s.isLive)
+  const isDeleting = useIsDeleting(worktree.path)
 
   return (
-    <li className="wt" data-activity={worktree.activity}>
+    <li className="wt" data-activity={worktree.activity} data-deleting={isDeleting || undefined} aria-busy={isDeleting || undefined}>
       <span className="wt-dot" aria-hidden />
       <span className="wt-main">
-        <a className="wt-name" href={`ghosttycd://${worktree.path}`} title={`Open ${worktree.path} in Ghostty`}>
+        <a
+          className="wt-name"
+          href={`ghosttycd://${worktree.path}`}
+          title={`Open ${worktree.path} in Ghostty`}
+          tabIndex={isDeleting ? -1 : undefined}
+        >
           {worktree.name}
         </a>
         <code className="wt-branch">{worktree.isDetached ? `detached at ${worktree.sha}` : worktree.branch}</code>
@@ -770,26 +1164,35 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
       <span className="wt-touched" title={new Date(worktree.lastTouchedAt).toLocaleString()}>
         {ago(worktree.lastTouchedAt, now)}
       </span>
-      <span className="wt-tags">
-        {worktree.devServerPort && (
-          <a className="tag tag-server" href={`http://localhost:${worktree.devServerPort}`}>
-            :{worktree.devServerPort}
-          </a>
-        )}
-        {worktree.devEnv && (
-          <span className="tag tag-env" data-env={worktree.devEnv}>
-            {worktree.devEnv}
-          </span>
-        )}
-        {live.length > 0 && (
-          <span className="tag tag-session" title={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
-            {live.length === 1 ? 'Claude' : `Claude ×${live.length}`}
-          </span>
-        )}
-      </span>
-      <span className="wt-menu">
-        <ActionMenu label={`Actions for ${worktree.name}`} actions={worktreeActions(worktree)} />
-      </span>
+      {isDeleting ? (
+        <span className="wt-deleting" role="status">
+          <span className="sync" data-busy="true" aria-hidden />
+          Deleting…
+        </span>
+      ) : (
+        <span className="wt-tags">
+          {worktree.devServerPort && (
+            <a className="tag tag-server" href={`http://localhost:${worktree.devServerPort}`}>
+              :{worktree.devServerPort}
+            </a>
+          )}
+          {worktree.devEnv && (
+            <span className="tag tag-env" data-env={worktree.devEnv}>
+              {worktree.devEnv}
+            </span>
+          )}
+          {live.length > 0 && (
+            <span className="tag tag-session" title={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
+              {live.length === 1 ? 'Claude' : `Claude ×${live.length}`}
+            </span>
+          )}
+        </span>
+      )}
+      {!isDeleting && (
+        <span className="wt-menu">
+          <ActionMenu label={`Actions for ${worktree.name}`} actions={worktreeActions(worktree)} />
+        </span>
+      )}
     </li>
   )
 }
@@ -1370,12 +1773,16 @@ const Sessions = ({
   prs,
   queue,
   artifacts,
+  newSession,
+  repo,
 }: {
   sessions: Session[]
   now: number
   worktrees: Worktree[]
   prs: PullRequest[]
   queue: ReviewQueue | null
+  newSession: Snapshot['features']['newSession']
+  repo: string
   artifacts: PublishedArtifact[]
 }) => {
   const liveStatus = useLive()
@@ -1430,6 +1837,7 @@ const Sessions = ({
           onChange={e => setQuery(e.target.value)}
           aria-label="Filter Claude sessions by name, branch, worktree or model"
         />
+        <NewSessionButton setup={newSession} repo={repo} />
       </header>
       {isSearching ? (
         matching.length === 0 ? (
@@ -1546,13 +1954,30 @@ const JiraTickets = ({
   prs,
   sessions,
   now,
+  newSession,
+  repo,
 }: {
   issues: JiraIssue[]
   worktrees: Worktree[]
   prs: PullRequest[]
   sessions: Session[]
   now: number
+  newSession: Snapshot['features']['newSession']
+  repo: string
 }) => {
+  // A ticket without a worktree yet can get one from the configured first
+  // message, with the ticket's key filled in.
+  const setupFor = (issue: JiraIssue, links: Links) =>
+    newSession.needsInput && !links.tree ? (
+      <NewSessionButton
+        setup={newSession}
+        repo={repo}
+        initialInput={issue.key}
+        label={`Set up a worktree for ${issue.key}`}
+        isSmall
+      />
+    ) : null
+
   const [view, setView] = useState<JiraView>(readJiraView)
   const statuses = orderStatuses(issues.map(i => ({ status: i.status, category: i.statusCategory })))
   const byStatus = new Map(
@@ -1603,7 +2028,10 @@ const JiraTickets = ({
                 {status} <span className="count">{list.length}</span>
               </h3>
               <ul className="jira-list">
-                {list.map(issue => (
+                {list.map(issue => {
+                  const links = linksOf(issue, worktrees, prs, sessions)
+
+                  return (
                   <li key={issue.key} className="jira-issue">
                     <a className="jira-key" href={issue.url}>
                       {issue.key}
@@ -1617,10 +2045,12 @@ const JiraTickets = ({
                         </a>
                       )}
                       <span>updated {ago(issue.updatedAt, now)}</span>
-                      <IssueLinks links={linksOf(issue, worktrees, prs, sessions)} />
+                      <IssueLinks links={links} />
                     </span>
+                    {setupFor(issue, links)}
                   </li>
-                ))}
+                  )
+                })}
               </ul>
             </div>
           )
@@ -1636,13 +2066,17 @@ const JiraTickets = ({
                   {status} <span className="count">{list.length}</span>
                 </h3>
                 <ul className="board-cards">
-                  {list.map(issue => (
+                  {list.map(issue => {
+                    const links = linksOf(issue, worktrees, prs, sessions)
+
+                    return (
                     <li key={issue.key} className="card">
                       <span className="card-top">
                         <a className="jira-key" href={issue.url}>
                           {issue.key}
                         </a>
                         <span className="card-type">{issue.type}</span>
+                        {setupFor(issue, links)}
                       </span>
                       <span className="card-summary" title={issue.summary}>
                         {issue.summary}
@@ -1653,11 +2087,12 @@ const JiraTickets = ({
                         </a>
                       )}
                       <span className="card-links">
-                        <IssueLinks links={linksOf(issue, worktrees, prs, sessions)} />
+                        <IssueLinks links={links} />
                       </span>
                       <span className="card-updated">updated {ago(issue.updatedAt, now)}</span>
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               </section>
             )
@@ -2701,6 +3136,7 @@ export const App = () => {
   return (
     <>
       <WindowBar title={snapshot.features.title} hasIcon={snapshot.features.hasIcon} />
+      <ConfirmHost />
       <main className="shell">
         <BurstLayer />
         <header className="top">
@@ -2737,6 +3173,8 @@ export const App = () => {
               prs={snapshot.prs}
               queue={snapshot.queue}
               artifacts={snapshot.artifacts}
+              newSession={snapshot.features.newSession}
+              repo={snapshot.repo}
             />
             <Worktrees worktrees={snapshot.worktrees} now={now} />
             {snapshot.features.jira && (
@@ -2746,6 +3184,8 @@ export const App = () => {
                 prs={snapshot.prs}
                 sessions={snapshot.sessions}
                 now={now}
+                newSession={snapshot.features.newSession}
+                repo={snapshot.repo}
               />
             )}
             <MemoryCard notes={snapshot.memory} now={now} />

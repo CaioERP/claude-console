@@ -3,9 +3,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
-import { config } from './config'
-import { getSnapshot, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
-import { isWindowAction, openExternally, openTerminal, windowAction } from './open'
+import { config, newSessionPrompt } from './config'
+import { REPO, getSnapshot, isWorktreePath, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
 import { readBattery } from './system'
 
@@ -147,6 +147,36 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (url.pathname === '/api/brand-icon') return handleIcon(res)
+
+  if (url.pathname === '/api/session/new') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    try {
+      const { dir, input } = JSON.parse(await readBody(req)) as { dir?: string; input?: string }
+
+      // Given a worktree, an empty session in it; otherwise the configured one in
+      // the repository.
+      if (dir) {
+        if (!(await isWorktreePath(String(dir)))) throw new Error('Not a worktree of this repository.')
+
+        await startSession(String(dir))
+      } else {
+        await startSession(REPO, newSessionPrompt(config, String(input ?? '').trim()))
+      }
+
+      res.statusCode = 204
+      res.end()
+    } catch (error) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
 
   if (url.pathname === '/api/session/end') {
     if (!isFromConsole(req)) {

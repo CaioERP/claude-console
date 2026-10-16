@@ -137,6 +137,7 @@ export type ConsoleFeatures = {
   hasIcon: boolean
   jira: boolean
   reviewQueue: { name: string; repo: string } | null
+  newSession: { needsInput: boolean; inputLabel: string; prompt: string; description: string }
 }
 
 export type ContributionDay = { date: string; github: number; claude: number }

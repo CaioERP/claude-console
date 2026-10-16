@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { featuresOf, resolveConfig } from './config'
+import { featuresOf, newSessionPrompt, resolveConfig } from './config'
 
 describe('resolveConfig', () => {
   it('turns every optional integration off by default', () => {
@@ -32,6 +32,31 @@ describe('resolveConfig', () => {
       resolveConfig({ brand: { title: 'Mine', icon: '/x.svg' }, reviewQueue: { repo: 'o/r', reviewer: 'rev', name: 'Rev' } as never }, {}),
     )
 
-    expect(features).toEqual({ title: 'Mine', hasIcon: true, jira: false, reviewQueue: { name: 'Rev', repo: 'o/r' } })
+    expect(features).toEqual({
+      title: 'Mine',
+      hasIcon: true,
+      jira: false,
+      reviewQueue: { name: 'Rev', repo: 'o/r' },
+      newSession: { needsInput: false, inputLabel: '', prompt: '', description: '' },
+    })
+  })
+})
+
+describe('newSessionPrompt', () => {
+  const config = resolveConfig({ newSession: { prompt: '/setup {input}', inputLabel: 'Ticket' } as never }, {})
+
+  it('fills the typed ticket or name into the first message', () => {
+    expect(newSessionPrompt(config, 'ABC-12')).toBe('/setup ABC-12')
+    expect(featuresOf(config).newSession).toEqual({ needsInput: true, inputLabel: 'Ticket', prompt: '/setup {input}', description: '' })
+  })
+
+  it('refuses anything a terminal could read as more than a name', () => {
+    for (const input of ['', 'a b', 'x;rm', '$(id)', 'a\nb', 'x'.repeat(81)]) {
+      expect(() => newSessionPrompt(config, input)).toThrow()
+    }
+  })
+
+  it('starts an empty session when nothing is configured', () => {
+    expect(newSessionPrompt(resolveConfig({}, {}), 'ignored')).toBe('')
   })
 })

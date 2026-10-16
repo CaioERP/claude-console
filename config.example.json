@@ -4,8 +4,11 @@
     "title": "Claude Console",
     "icon": ""
   },
-  "devServer": { "process": "webpack" },
+  "devServer": {
+    "process": "webpack"
+  },
   "devEnv": null,
   "jira": null,
+  "newSession": null,
   "reviewQueue": null
 }

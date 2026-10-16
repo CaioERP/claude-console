@@ -76,6 +76,7 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 | `devServer.process` | Text in a listening process's command line that marks it as a worktree's dev server. Default `webpack`. |
 | `devEnv` | `{ files, key, rules }`: the env files (relative to each worktree) that hold the URL its dev server talks to, the variable that holds it, and `{ match, name }` rules that name the environment by host, such as `{ "match": "-stg.", "name": "STG" }`. |
 | `jira` | `{ site, jql }`: your Jira Cloud site, like `https://example.atlassian.net`, and optionally the search. The default search is your open tickets. Requires `JIRA_API_USER` and `JIRA_API_TOKEN` in `~/.config/claude-console/env`. |
+| `newSession` | `{ prompt, inputLabel, description }`: what the **+** beside the session search starts, after a confirmation window that shows `description`, the folder and the command. It opens a new Claude Code session in the repository, in a new Ghostty tab, with `prompt` as its first message, such as a skill: `"/setup-faro-worktree {input}"`. When `prompt` holds `{input}`, the **+** first asks for it under `inputLabel`; only letters, numbers, `.`, `-` and `_` are accepted. Without it, the **+** starts an empty session. |
 | `reviewQueue` | `{ repo, reviewer, name, mergedPattern, branchSuffix }`: a reviewer's queue that your pull requests are sent to. A pull request is yours when you wrote it, or, with `branchSuffix` (like `-sender-{login}`), when its branch ends with your GitHub login. A comment by `reviewer` that matches `mergedPattern` counts as merged; any other comment by the reviewer counts as rejected, and the last one becomes the reason. |
 
 ## What It Shows
@@ -87,6 +88,7 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 - **Claude usage.** The 5-hour and 7-day rate-limit windows, today's tokens and cost, and a 14-day chart.
 - **Memory and artifacts.** The Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
 - **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.
+- **New sessions.** The **+** beside the session search starts a Claude Code session in a new Ghostty tab (see `newSession`), and **Start session here** in a worktree's menu starts an empty one in that worktree.
 - **Worktrees.** Grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console; `git worktree remove` runs without force, so uncommitted work is never lost.
 
 ## Privacy
