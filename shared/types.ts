@@ -141,6 +141,9 @@ export type ConsoleFeatures = {
   hasIcon: boolean
   jira: boolean
   reviewQueue: { name: string; repo: string } | null
+  // The repositories Start Work offers, by name, when it is configured.
+  startWork: { repos: string[] } | null
+  services: boolean
   newSession: { needsInput: boolean; inputLabel: string; prompt: string; description: string }
 }
 

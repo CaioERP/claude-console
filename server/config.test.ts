@@ -28,6 +28,49 @@ describe('resolveConfig', () => {
     expect(resolveConfig({ terminal: 'xterm' as never }, {}).terminal).toBe('ghostty')
   })
 
+  it('reads repository objects with their Start Work settings', () => {
+    const c = resolveConfig(
+      {
+        repo: ['/home/dev/plain', { path: '/home/dev/app', name: 'App', base: { remote: 'upstream', branch: 'main' } }] as never,
+      },
+      {},
+    )
+
+    expect(c.repos).toEqual(['/home/dev/plain', '/home/dev/app'])
+    expect(c.repoConfigs[0]).toEqual({
+      path: '/home/dev/plain',
+      name: 'plain',
+      base: null,
+      worktreesDir: '/home/dev/plain-worktrees',
+      prRepos: null,
+    })
+    expect(c.repoConfigs[1]).toMatchObject({
+      name: 'App',
+      base: { remote: 'upstream', branch: 'main' },
+      worktreesDir: '/home/dev/app-worktrees',
+    })
+  })
+
+  it('offers Start Work only for repositories with a base, and only when configured', () => {
+    const values = {
+      repo: ['/home/dev/a', { path: '/home/dev/b', name: 'B', base: { remote: 'u', branch: 'm' } }],
+      startWork: { prompt: '/start {key}' },
+    } as never
+
+    expect(featuresOf(resolveConfig(values, {})).startWork).toEqual({ repos: ['B'] })
+    expect(featuresOf(resolveConfig({ repo: '/home/dev/a' }, {})).startWork).toBeNull()
+  })
+
+  it('resolves services and drops entries without a name or file', () => {
+    const c = resolveConfig(
+      { services: [{ name: 'Tests', file: '/home/dev/a/compose.yml' }, { name: '', file: '/x' }] } as never,
+      {},
+    )
+
+    expect(c.services).toEqual([{ name: 'Tests', file: '/home/dev/a/compose.yml' }])
+    expect(featuresOf(c).services).toBe(true)
+  })
+
   it('fills in the Jira query and the review queue defaults', () => {
     const config = resolveConfig(
       { jira: { site: 'https://example.atlassian.net/', jql: '' }, reviewQueue: { repo: 'o/r', reviewer: 'rev' } as never },
@@ -50,6 +93,8 @@ describe('resolveConfig', () => {
       jira: false,
       reviewQueue: { name: 'Rev', repo: 'o/r' },
       newSession: { needsInput: false, inputLabel: '', prompt: '', description: '' },
+      startWork: null,
+      services: false,
     })
   })
 })

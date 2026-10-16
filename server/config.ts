@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 
 import type { ConsoleFeatures } from '../shared/types'
 
@@ -8,9 +8,27 @@ import type { ConsoleFeatures } from '../shared/types'
 // to `match`, or containing it, is shown as `name`.
 export type EnvRule = { match: string; name: string }
 
+// A watched repository and what Start Work needs to branch a ticket from it.
+export type RepoConfig = {
+  path: string
+  name: string
+  // The remote branch new ticket branches start from; without it, Start Work
+  // does not offer this repository.
+  base: { remote: string; branch: string } | null
+  // Where a ticket's worktree goes: <worktreesDir>/<KEY>.
+  worktreesDir: string
+  // The GitHub repositories searched for a ticket's pull requests; by default,
+  // those behind the repository's remotes.
+  prRepos: string[] | null
+}
+
+// A Docker Compose stack the Services panel shows, by its file.
+export type ServiceConfig = { name: string; file: string }
+
 export type ConsoleConfig = {
   // The git repositories whose worktrees the console lists.
   repos: string[]
+  repoConfigs: RepoConfig[]
   brand: {
     // The name in the header and the window title.
     title: string
@@ -42,6 +60,10 @@ export type ConsoleConfig = {
     // Forwarded branches end with this; {login} is your GitHub login.
     branchSuffix: string
   } | null
+  // What Start Work opens in each new worktree: a Claude Code session whose
+  // first message is `prompt`, with {key} replaced by the ticket's key.
+  startWork: { prompt: string } | null
+  services: ServiceConfig[]
 }
 
 // The terminals the console can open tabs in, each with a desktop/<name>-tab script.
@@ -51,11 +73,15 @@ export type Terminal = (typeof TERMINALS)[number]
 
 export const CONFIG_DIR = join(homedir(), '.config', 'claude-console')
 
-// The file accepts "repo" as one path or a list, and "repos" as a list.
-type ConfigFile = Partial<Omit<ConsoleConfig, 'repos'>> & { repo?: string | string[]; repos?: string[] }
+type RepoEntry = string | { path: string; name?: string; base?: RepoConfig['base']; worktreesDir?: string; prRepos?: string[] }
+
+// The file accepts "repo" as one entry or a list, and "repos" as a list; an
+// entry is a path, or an object with the path and its Start Work settings.
+type ConfigFile = Partial<Omit<ConsoleConfig, 'repos' | 'repoConfigs'>> & { repo?: RepoEntry | RepoEntry[]; repos?: RepoEntry[] }
 
 const DEFAULTS: ConsoleConfig = {
   repos: [],
+  repoConfigs: [],
   brand: { title: 'Claude Console', icon: '' },
   terminal: 'ghostty',
   devServer: { process: 'webpack' },
@@ -63,6 +89,8 @@ const DEFAULTS: ConsoleConfig = {
   jira: null,
   newSession: null,
   reviewQueue: null,
+  startWork: null,
+  services: [],
 }
 
 const DEFAULT_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
@@ -84,11 +112,27 @@ const readConfigFile = (): { path: string; values: ConfigFile } => {
 // Fills in defaults, expands "~/", and lets CONSOLE_REPO (paths separated by
 // ":") override the repositories.
 export const resolveConfig = (values: ConfigFile, env: NodeJS.ProcessEnv = process.env): ConsoleConfig => {
-  const listed = env.CONSOLE_REPO ? env.CONSOLE_REPO.split(':') : [values.repo ?? [], values.repos ?? []].flat()
-  const repos = [...new Set(listed.map(r => r.trim()).filter(Boolean).map(r => resolve(expand(r))))]
+  const listed: RepoEntry[] = env.CONSOLE_REPO ? env.CONSOLE_REPO.split(':') : [values.repo ?? [], values.repos ?? []].flat()
+  const repoConfigs = new Map<string, RepoConfig>()
+
+  for (const entry of listed) {
+    const raw = typeof entry === 'string' ? { path: entry } : entry
+    const path = raw.path?.trim() ? resolve(expand(raw.path.trim())) : ''
+
+    if (!path || repoConfigs.has(path)) continue
+
+    repoConfigs.set(path, {
+      path,
+      name: raw.name || basename(path),
+      base: raw.base?.remote && raw.base.branch ? { remote: raw.base.remote, branch: raw.base.branch } : null,
+      worktreesDir: raw.worktreesDir ? resolve(expand(raw.worktreesDir)) : `${path}-worktrees`,
+      prRepos: raw.prRepos?.length ? raw.prRepos : null,
+    })
+  }
 
   return {
-    repos,
+    repos: [...repoConfigs.keys()],
+    repoConfigs: [...repoConfigs.values()],
     brand: {
       title: values.brand?.title || DEFAULTS.brand.title,
       icon: values.brand?.icon ? resolve(expand(values.brand.icon)) : '',
@@ -117,6 +161,10 @@ export const resolveConfig = (values: ConfigFile, env: NodeJS.ProcessEnv = proce
           branchSuffix: values.reviewQueue.branchSuffix || '',
         }
       : null,
+    startWork: values.startWork?.prompt ? { prompt: values.startWork.prompt } : null,
+    services: (values.services ?? [])
+      .filter(s => s?.name && s.file)
+      .map(s => ({ name: s.name, file: resolve(expand(s.file)) })),
   }
 }
 
@@ -139,6 +187,8 @@ export const featuresOf = (c: ConsoleConfig): ConsoleFeatures => ({
         description: c.newSession.description,
       }
     : { needsInput: false, inputLabel: '', prompt: '', description: '' },
+  startWork: c.startWork ? { repos: c.repoConfigs.filter(r => r.base).map(r => r.name) } : null,
+  services: c.services.length > 0,
 })
 
 // What a new session's first message is: the configured prompt with {input}
