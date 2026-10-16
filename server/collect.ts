@@ -556,7 +556,7 @@ const refreshUsage = () =>
     }
   })())
 
-const refreshWorktrees = () =>
+export const refreshWorktrees = () =>
   (worktreesJob ??= (async () => {
     const now = Date.now()
 

@@ -4,9 +4,20 @@ import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
 import { config, newSessionPrompt } from './config'
-import { REPOS, getSnapshot, isWorktreePath, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import {
+  REPOS,
+  getSnapshot,
+  isWorktreePath,
+  refreshWorktrees,
+  removeDormantWorktree,
+  runningSessions,
+  sessionCost,
+  workingAgents,
+} from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
+import { run } from './exec'
+import { executeStart, isTicketKey, planWorktree, readRepoState, startPrompt } from './startwork'
 import { readBattery } from './system'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
@@ -53,6 +64,74 @@ const handleTerminal = async (req: IncomingMessage, res: ServerResponse) => {
   } catch (error) {
     res.statusCode = 400
     res.end(JSON.stringify({ error: String(error) }))
+  }
+}
+
+// Start Work on a ticket: "plan" shows what would run, "start" creates the
+// worktrees and opens a session in each, and "just-start" only opens a session
+// in a repository's main checkout. Repositories are named, never given as paths.
+const handleTicketStart = async (req: IncomingMessage, res: ServerResponse, mode: 'plan' | 'start' | 'just-start') => {
+  if (!isFromConsole(req)) {
+    res.statusCode = 403
+    res.end()
+    return
+  }
+
+  res.setHeader('Content-Type', 'application/json')
+
+  try {
+    if (!config.startWork) throw new Error('Start Work is not configured.')
+
+    const body = JSON.parse(await readBody(req)) as { key?: unknown; repos?: unknown; repo?: unknown }
+    const key = String(body.key ?? '')
+
+    if (!isTicketKey(key)) throw new Error(`Not a ticket key: ${key}`)
+
+    const prompt = startPrompt(config.startWork.prompt, key)
+
+    if (mode === 'just-start') {
+      const repo = config.repoConfigs.find(r => r.name === body.repo)
+
+      if (!repo) throw new Error(`Unknown repository: ${String(body.repo)}`)
+
+      await startSession(repo.path, prompt)
+      res.end(JSON.stringify({ results: [{ repo: repo.name, path: repo.path, plan: 'just-start', ok: true }] }))
+      return
+    }
+
+    const names = Array.isArray(body.repos) ? body.repos : []
+
+    if (names.length === 0) throw new Error('Pick at least one repository.')
+
+    const repos = names.map(name => {
+      const repo = config.repoConfigs.find(r => r.name === name && r.base)
+
+      if (!repo) throw new Error(`Unknown repository: ${String(name)}`)
+
+      return repo
+    })
+
+    if (mode === 'plan') {
+      const plans = await Promise.all(
+        repos.map(async repo => ({ repo: repo.name, plan: planWorktree(key, repo, await readRepoState(repo, key)) })),
+      )
+
+      res.end(JSON.stringify({ plans }))
+      return
+    }
+
+    const results = await executeStart(key, repos, {
+      readState: readRepoState,
+      run: argv => run(argv[0]!, argv.slice(1), { timeoutMs: 5 * 60_000 }),
+      open: startSession,
+      prompt,
+    })
+
+    await refreshWorktrees()
+    res.end(JSON.stringify({ results }))
+  } catch (error) {
+    res.statusCode = 400
+    res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
   }
 }
 
@@ -234,6 +313,12 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   if (url.pathname === '/api/terminal') return handleTerminal(req, res)
 
   if (url.pathname === '/api/worktree/remove') return handleRemoveWorktree(req, res)
+
+  if (url.pathname === '/api/ticket/plan') return handleTicketStart(req, res, 'plan')
+
+  if (url.pathname === '/api/ticket/start') return handleTicketStart(req, res, 'start')
+
+  if (url.pathname === '/api/ticket/just-start') return handleTicketStart(req, res, 'just-start')
 
   if (url.pathname === '/api/focus') return handleFocus(req, res)
 

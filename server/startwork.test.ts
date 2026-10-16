@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isTicketKey, planWorktree } from './startwork'
+import { executeStart, isTicketKey, planWorktree, startPrompt } from './startwork'
 
 const repo = {
   path: '/home/dev/app',
@@ -60,5 +60,71 @@ describe('planWorktree', () => {
 
   it('refuses a repository without a base', () => {
     expect(planWorktree('ABC-1', { ...repo, base: null }, empty).kind).toBe('blocked')
+  })
+})
+
+describe('executeStart', () => {
+  const a = { ...repo, name: 'A', path: '/home/dev/a', worktreesDir: '/home/dev/a-worktrees' }
+  const b = { ...repo, name: 'B', path: '/home/dev/b', worktreesDir: '/home/dev/b-worktrees' }
+
+  it('isolates a failing fetch to its repository', async () => {
+    const opened: string[] = []
+    const results = await executeStart('ABC-1', [a, b], {
+      readState: async () => empty,
+      run: async argv => {
+        if (argv.includes('/home/dev/a') && argv.includes('fetch')) throw new Error('offline')
+      },
+      open: async dir => {
+        opened.push(dir)
+      },
+      prompt: '/start-ticket ABC-1',
+    })
+
+    expect(results.map(r => [r.repo, r.ok])).toEqual([
+      ['A', false],
+      ['B', true],
+    ])
+    expect(results[0]!.error).toContain('offline')
+    expect(opened).toEqual(['/home/dev/b-worktrees/ABC-1'])
+  })
+
+  it('opens a session in a reused checkout without running git', async () => {
+    const ran: string[][] = []
+    const opened: [string, string][] = []
+    const results = await executeStart('ABC-1', [a], {
+      readState: async () => ({ ...empty, worktrees: [{ path: '/home/dev/a', branch: 'ABC-1' }] }),
+      run: async argv => {
+        ran.push(argv)
+      },
+      open: async (dir, prompt) => {
+        opened.push([dir, prompt])
+      },
+      prompt: '/start-ticket ABC-1',
+    })
+
+    expect(ran).toEqual([])
+    expect(opened).toEqual([['/home/dev/a', '/start-ticket ABC-1']])
+    expect(results).toEqual([{ repo: 'A', path: '/home/dev/a', plan: 'reuse', ok: true }])
+  })
+
+  it('opens nothing for a blocked repository', async () => {
+    const opened: string[] = []
+    const results = await executeStart('ABC-1', [a], {
+      readState: async () => ({ ...empty, dirExists: true }),
+      run: async () => undefined,
+      open: async dir => {
+        opened.push(dir)
+      },
+      prompt: '',
+    })
+
+    expect(results[0]).toMatchObject({ repo: 'A', plan: 'blocked', ok: false })
+    expect(opened).toEqual([])
+  })
+})
+
+describe('startPrompt', () => {
+  it('fills the key into the prompt', () => {
+    expect(startPrompt('/start-ticket {key} now {key}', 'ABC-1')).toBe('/start-ticket ABC-1 now ABC-1')
   })
 })
