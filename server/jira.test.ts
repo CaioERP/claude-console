@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { toIssue } from './jira'
+import { adfToText, toIssue } from './jira'
 import { isOpenable, isSessionId } from './open'
 
 describe('toIssue', () => {
@@ -63,5 +63,30 @@ describe('isSessionId', () => {
     expect(isSessionId('00000000-0000-4000-8000-000000000001')).toBe(true)
     expect(isSessionId('00000000; rm -rf ~')).toBe(false)
     expect(isSessionId('')).toBe(false)
+  })
+})
+
+describe('adfToText', () => {
+  it('turns paragraphs, headings, lists and breaks into plain text', () => {
+    expect(
+      adfToText({
+        type: 'doc',
+        content: [
+          { type: 'heading', content: [{ type: 'text', text: 'Goal' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Do it' }, { type: 'hardBreak' }, { type: 'text', text: 'now' }] },
+          {
+            type: 'bulletList',
+            content: [
+              { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'one' }] }] },
+              { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'two' }] }] },
+            ],
+          },
+        ],
+      }),
+    ).toBe('Goal\n\nDo it\nnow\n\n- one\n- two')
+  })
+
+  it('returns nothing for an empty description', () => {
+    expect(adfToText(null)).toBe('')
   })
 })

@@ -49,7 +49,8 @@ export const toIssue = (raw: RawIssue, site: string): JiraIssue => ({
   url: `${site}/browse/${raw.key}`,
 })
 
-export const collectJira = async (jira: NonNullable<ConsoleConfig['jira']>): Promise<JiraIssue[]> => {
+// Reads a Jira Cloud REST path with the configured credentials.
+const jiraGet = async (jira: NonNullable<ConsoleConfig['jira']>, path: string) => {
   const user = process.env.JIRA_API_USER
   const token = process.env.JIRA_API_TOKEN
 
@@ -57,22 +58,57 @@ export const collectJira = async (jira: NonNullable<ConsoleConfig['jira']>): Pro
     throw new Error('JIRA_API_USER and JIRA_API_TOKEN are not set; put them in ~/.config/claude-console/env (chmod 600)')
   }
 
-  const params = new URLSearchParams({
-    jql: jira.jql,
-    fields: 'summary,status,issuetype,priority,updated,parent',
-    maxResults: '100',
-  })
-  const body = await curl(
+  return curl(
     [
       'silent',
       'show-error',
       'fail',
       `user = ${quote(`${user}:${token}`)}`,
-      `url = ${quote(`${jira.site}/rest/api/3/search/jql?${params}`)}`,
+      `url = ${quote(`${jira.site}${path}`)}`,
       'header = "Accept: application/json"',
     ].join('\n'),
   )
-  const data = JSON.parse(body) as { issues?: RawIssue[] }
+}
+
+export const collectJira = async (jira: NonNullable<ConsoleConfig['jira']>): Promise<JiraIssue[]> => {
+  const params = new URLSearchParams({
+    jql: jira.jql,
+    fields: 'summary,status,issuetype,priority,updated,parent',
+    maxResults: '100',
+  })
+  const data = JSON.parse(await jiraGet(jira, `/rest/api/3/search/jql?${params}`)) as { issues?: RawIssue[] }
 
   return (data.issues ?? []).map(raw => toIssue(raw, jira.site))
+}
+
+type AdfNode = { type?: string; text?: string; content?: AdfNode[] }
+
+const inlineText = (node: AdfNode): string =>
+  node.type === 'text' ? (node.text ?? '') : node.type === 'hardBreak' ? '\n' : (node.content ?? []).map(inlineText).join('')
+
+const blockText = (node: AdfNode): string => {
+  switch (node.type) {
+    case 'bulletList':
+    case 'orderedList':
+      return (node.content ?? []).map(item => `- ${(item.content ?? []).map(blockText).join('\n')}`).join('\n')
+    case 'doc':
+    case 'blockquote':
+    case 'panel':
+    case 'expand':
+      return (node.content ?? []).map(blockText).filter(Boolean).join('\n\n')
+    default:
+      return inlineText(node)
+  }
+}
+
+// A Jira description, stored as Atlassian Document Format, as plain text:
+// blocks separated by a blank line and list items as "- " lines.
+export const adfToText = (node: unknown) => (node && typeof node === 'object' ? blockText(node as AdfNode).trim() : '')
+
+export const fetchDescription = async (jira: NonNullable<ConsoleConfig['jira']>, key: string) => {
+  const data = JSON.parse(await jiraGet(jira, `/rest/api/3/issue/${encodeURIComponent(key)}?fields=description`)) as {
+    fields?: { description?: unknown }
+  }
+
+  return adfToText(data.fields?.description)
 }

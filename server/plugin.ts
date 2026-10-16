@@ -18,6 +18,7 @@ import { isWindowAction, openExternally, openTerminal, startSession, windowActio
 import { endSession } from './end'
 import { run } from './exec'
 import { executeStart, isTicketKey, planWorktree, readRepoState, startPrompt } from './startwork'
+import { ticketDetail } from './tickets'
 import { readBattery } from './system'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
@@ -313,6 +314,32 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   if (url.pathname === '/api/terminal') return handleTerminal(req, res)
 
   if (url.pathname === '/api/worktree/remove') return handleRemoveWorktree(req, res)
+
+  if (url.pathname === '/api/ticket') {
+    res.setHeader('Content-Type', 'application/json')
+
+    const key = url.searchParams.get('key') ?? ''
+
+    if (!isTicketKey(key)) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: `Not a ticket key: ${key}` }))
+      return
+    }
+
+    if (!(await getSnapshot()).jira.some(issue => issue.key === key)) {
+      res.statusCode = 404
+      res.end(JSON.stringify({ error: 'Not in your Jira list' }))
+      return
+    }
+
+    try {
+      res.end(JSON.stringify(await ticketDetail(key)))
+    } catch (error) {
+      res.statusCode = 500
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
 
   if (url.pathname === '/api/ticket/plan') return handleTicketStart(req, res, 'plan')
 

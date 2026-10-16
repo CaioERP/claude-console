@@ -232,3 +232,24 @@ export type Snapshot = {
   prsAt: number
   errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; artifacts?: string; profile?: string }
 }
+
+// A pull request linked to a ticket, open or closed, in any repository.
+export type TicketPr = {
+  repo: string
+  number: number
+  title: string
+  url: string
+  branch: string
+  author: string
+  state: 'open' | 'merged' | 'closed'
+  createdAt: number
+  ci: CiState
+}
+
+export type TicketDetail = {
+  key: string
+  description: string
+  prs: TicketPr[]
+  // Repositories whose pull requests could not be read, and why.
+  prErrors: { repo: string; error: string }[]
+}
