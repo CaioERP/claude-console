@@ -2643,3 +2643,77 @@ h2 {
 .start-results li[data-ok='false'] {
   color: var(--ink-2);
 }
+
+/* Ticket view */
+
+.ticket-view h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.ticket-back {
+  display: inline-block;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.ticket-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.ticket-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.4rem 0 0;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+}
+
+.ticket-description {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--ink-2);
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.ticket-repo {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+.ticket-prs {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ticket-prs li[data-state='closed'] {
+  color: var(--ink-3);
+}
+
+.ticket-pr-meta {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.ticket-chip {
+  margin-right: 0.4rem;
+  text-decoration: none;
+}
+
+a.jira-summary-text,
+a.card-summary {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.jira-summary-text:hover,
+a.card-summary:hover {
+  text-decoration: underline;
+}

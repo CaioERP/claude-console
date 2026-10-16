@@ -45,6 +45,8 @@ import {
 } from './format'
 import { MemoryGraph } from './MemoryGraph'
 import { StartWorkButton } from './StartWork'
+import { TicketChip, TicketLink, TicketView } from './TicketView'
+import { TicketKeys, useTicketParam } from './tickets'
 
 const POLL_MS = 10_000
 const THEME_KEY = 'claude-console:theme'
@@ -1161,6 +1163,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         <code className="wt-branch">{worktree.isDetached ? `detached at ${worktree.sha}` : worktree.branch}</code>
         <span className="wt-subject">
           {worktree.repoName && <span className="wt-repo">{worktree.repoName}</span>}
+          <TicketChip text={worktree.branch || worktree.name} />
           {worktree.subject}
         </span>
       </span>
@@ -1744,6 +1747,7 @@ const SessionRow = ({
             <WorktreeTags worktree={tree} />
           </span>
         )}
+        <TicketChip text={session.branch} />
         <SessionPrs session={session} prs={prs} queue={queue} />
         <SessionArtifacts session={session} artifacts={artifacts} />
         <span className="session-seen" data-status={session.isRunning ? session.runStatus : undefined}>
@@ -2045,7 +2049,9 @@ const JiraTickets = ({
                     <a className="jira-key" href={issue.url}>
                       {issue.key}
                     </a>
-                    <span className="jira-summary-text">{issue.summary}</span>
+                    <TicketLink ticketKey={issue.key} className="jira-summary-text">
+                      {issue.summary}
+                    </TicketLink>
                     <span className="jira-meta">
                       <span>{issue.type}</span>
                       {issue.parentKey && (
@@ -2087,9 +2093,9 @@ const JiraTickets = ({
                         <span className="card-type">{issue.type}</span>
                         {setupFor(issue, links)}
                       </span>
-                      <span className="card-summary" title={issue.summary}>
+                      <TicketLink ticketKey={issue.key} className="card-summary">
                         {issue.summary}
-                      </span>
+                      </TicketLink>
                       {issue.parentKey && (
                         <a className="card-parent" href={parentUrl(issue)} title={issue.parentKey}>
                           {issue.parentSummary || issue.parentKey}
@@ -3111,6 +3117,7 @@ const useSessionFromUrl = (isReady: boolean) => {
 export const App = () => {
   const { snapshot, error, isRefreshing, isFetching, refresh } = useSnapshot()
   const now = useNow()
+  const [ticket] = useTicketParam()
 
   useSessionFromUrl(!!snapshot)
 
@@ -3172,6 +3179,28 @@ export const App = () => {
             </p>
           ))}
         </header>
+        <TicketKeys.Provider value={snapshot.jira.map(issue => issue.key)}>
+        {ticket ? (
+          <TicketView
+            issue={snapshot.jira.find(issue => issue.key === ticket)}
+            ticketKey={ticket}
+            snapshot={snapshot}
+            renderWorktree={w => <WorktreeRow key={w.path} worktree={w} now={now} />}
+            renderSession={s => (
+              <SessionRow
+                key={s.id}
+                session={s}
+                now={now}
+                worktrees={snapshot.worktrees}
+                live={null}
+                prs={snapshot.prs}
+                queue={snapshot.queue}
+                artifacts={snapshot.artifacts}
+              />
+            )}
+          />
+        ) : (
+        <>
         <BriefingCard snapshot={snapshot} now={now} />
         <div className="grid">
           <div className="column">
@@ -3211,6 +3240,9 @@ export const App = () => {
             <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
           </div>
         </div>
+        </>
+        )}
+        </TicketKeys.Provider>
       </main>
       <footer className="credit">
         <a href="https://github.com/interaminense">@interaminense</a>

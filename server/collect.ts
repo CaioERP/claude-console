@@ -315,7 +315,7 @@ export const collectWorktrees = async (sessions: Session[], now: number): Promis
       path,
       name: basename(path),
       repo: entry.repo,
-      repoName: REPOS.length > 1 ? basename(entry.repo) : '',
+      repoName: REPOS.length > 1 ? (config.repoConfigs.find(r => r.path === entry.repo)?.name ?? basename(entry.repo)) : '',
       branch: entry.branch,
       isDetached: entry.isDetached,
       isMain: path === entry.repo,
