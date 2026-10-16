@@ -38,6 +38,10 @@ export type LiveResponse = { sessions: LiveStatus; focus: FocusRequest | null }
 export type Worktree = {
   path: string
   name: string
+  // The main checkout of the repository it belongs to, and that repository's
+  // name when the console watches more than one.
+  repo: string
+  repoName: string
   branch: string
   isDetached: boolean
   isMain: boolean

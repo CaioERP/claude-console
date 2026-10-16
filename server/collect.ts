@@ -125,7 +125,7 @@ const resumeDirOf = async (id: string, dir: string, top: string, launchDir = '')
   return ''
 }
 
-export const REPO = config.repo
+export const REPOS = config.repos
 
 const run = (cmd: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}) =>
   new Promise<string>((resolve, reject) => {
@@ -301,13 +301,13 @@ const devUrlOf = async (path: string) => {
 }
 
 export const collectWorktrees = async (sessions: Session[], now: number): Promise<Worktree[]> => {
-  if (!REPO) throw new Error(`No repository is configured: set "repo" in ${CONFIG_PATH} or CONSOLE_REPO.`)
+  if (!REPOS.length) throw new Error(`No repository is configured: set "repo" in ${CONFIG_PATH} or CONSOLE_REPO.`)
 
-  const [porcelain, servers] = await Promise.all([
-    run('git', ['-C', REPO, 'worktree', 'list', '--porcelain']),
+  const [porcelains, servers] = await Promise.all([
+    Promise.all(REPOS.map(repo => run('git', ['-C', repo, 'worktree', 'list', '--porcelain']))),
     devServersByWorktree(),
   ])
-  const entries = parseWorktreePorcelain(porcelain)
+  const entries = REPOS.flatMap((repo, i) => parseWorktreePorcelain(porcelains[i]!).map(entry => ({ ...entry, repo })))
 
   return mapLimit(entries, 6, async (entry): Promise<Worktree> => {
     const { path } = entry
@@ -331,9 +331,11 @@ export const collectWorktrees = async (sessions: Session[], now: number): Promis
     return {
       path,
       name: basename(path),
+      repo: entry.repo,
+      repoName: REPOS.length > 1 ? basename(entry.repo) : '',
       branch: entry.branch,
       isDetached: entry.isDetached,
-      isMain: path === REPO,
+      isMain: path === entry.repo,
       sha,
       subject,
       committedAt,
@@ -475,7 +477,7 @@ export const BUILD = `${Date.now().toString(36)}-${process.pid}`
 const state: Snapshot = {
   build: BUILD,
   generatedAt: 0,
-  repo: REPO,
+  repo: REPOS.join(' · '),
   worktrees: [],
   prs: [],
   sessions: [],
@@ -547,7 +549,15 @@ const refreshUsage = () =>
     }
 
     try {
-      state.memory = await collectMemory(REPO)
+      const notes = await Promise.all(REPOS.map(collectMemory))
+
+      // Notes of several repositories can share a file name, so each keeps its
+      // repository's name in front.
+      state.memory = REPOS.length > 1
+        ? notes
+            .flatMap((list, i) => list.map(note => ({ ...note, file: `${basename(REPOS[i]!)}/${note.file}` })))
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+        : (notes[0] ?? [])
       delete state.errors.memory
     } catch (error) {
       state.errors.memory = error instanceof Error ? error.message : String(error)
@@ -665,7 +675,7 @@ export const removeDormantWorktree = async (path: string) => {
   if (worktree.sessions.some(s => s.isRunning)) throw new Error('A Claude session is running in it.')
 
   try {
-    await run('git', ['-C', REPO, 'worktree', 'remove', '--', path], { timeoutMs: 5 * 60_000 })
+    await run('git', ['-C', worktree.repo, 'worktree', 'remove', '--', path], { timeoutMs: 5 * 60_000 })
   } catch (error) {
     const message = (error as { stderr?: string }).stderr || (error instanceof Error ? error.message : String(error))
 
@@ -675,13 +685,11 @@ export const removeDormantWorktree = async (path: string) => {
   await refreshWorktrees()
 }
 
-// Whether a path is one of the repository's worktrees, as git lists them now.
+// Whether a path is one of the repositories' worktrees, as git lists them now.
 export const isWorktreePath = async (path: string) => {
-  if (!REPO) return false
+  const porcelains = await Promise.all(REPOS.map(repo => quiet(run('git', ['-C', repo, 'worktree', 'list', '--porcelain']), '')))
 
-  const porcelain = await quiet(run('git', ['-C', REPO, 'worktree', 'list', '--porcelain']), '')
-
-  return parseWorktreePorcelain(porcelain).some(entry => entry.path === path)
+  return porcelains.some(porcelain => parseWorktreePorcelain(porcelain).some(entry => entry.path === path))
 }
 
 // The cost the status line last reported for a session, in US dollars.

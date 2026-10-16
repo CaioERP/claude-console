@@ -4,7 +4,7 @@ import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
 import { config, newSessionPrompt } from './config'
-import { REPO, getSnapshot, isWorktreePath, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import { REPOS, getSnapshot, isWorktreePath, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
 import { readBattery } from './system'
@@ -35,7 +35,7 @@ const isFromConsole = (req: IncomingMessage) => {
   return req.method === 'POST' && req.headers['x-claude-console'] === '1' && (!origin || ORIGINS.has(origin))
 }
 
-// Opens a link in the default browser, or a folder in a new Ghostty tab. Only
+// Opens a link in the default browser, or a folder in a new terminal tab. Only
 // the console's own page may ask: the request must come from its origin and
 // carry the console's header.
 const handleTerminal = async (req: IncomingMessage, res: ServerResponse) => {
@@ -165,7 +165,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
 
         await startSession(String(dir))
       } else {
-        await startSession(REPO, newSessionPrompt(config, String(input ?? '').trim()))
+        // With several repositories, the configured session starts in the first.
+        await startSession(REPOS[0] ?? '', newSessionPrompt(config, String(input ?? '').trim()))
       }
 
       res.statusCode = 204

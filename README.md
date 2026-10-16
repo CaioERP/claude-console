@@ -11,7 +11,7 @@ Everything runs on your machine. The console reads your local Claude Code files,
 - **git**, **jq**, **curl**, and **ss** (from iproute2).
 - **GitHub CLI** (`gh`), signed in: `gh auth status` must succeed.
 - **Claude Code**, with its data in `~/.claude`.
-- Optional: a Chromium-based browser (Chrome, Chromium, Brave, or Edge) to open the console in its own app window; `xdotool` and `wmctrl` to size, focus, maximize, and close that window; [Ghostty](https://ghostty.org) for the buttons that open a worktree or resume a session in a new terminal tab.
+- Optional: a Chromium-based browser (Chrome, Chromium, Brave, or Edge) to open the console in its own app window; `xdotool` and `wmctrl` to size, focus, maximize, and close that window; [Ghostty](https://ghostty.org) or Terminator for the buttons that open a worktree or resume a session in a new terminal tab.
 
 ## Install
 
@@ -73,6 +73,8 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 | `repo` | The git repository whose worktrees are listed. `CONSOLE_REPO` overrides it. Required. |
 | `brand.title` | The name in the header and the window title. |
 | `brand.icon` | An SVG, PNG, ICO, WebP, or JPEG on this machine, shown before the title. Keep it outside the repository. |
+| `terminal` | The terminal the open and resume buttons use: `ghostty` (default) or `terminator`. |
+| `repo` (list) | `repo` also takes a list of repositories, and `CONSOLE_REPO` takes paths separated by `:`; each worktree then shows its repository. |
 | `devServer.process` | Text in a listening process's command line that marks it as a worktree's dev server. Default `webpack`. |
 | `devEnv` | `{ files, key, rules }`: the env files (relative to each worktree) that hold the URL its dev server talks to, the variable that holds it, and `{ match, name }` rules that name the environment by host, such as `{ "match": "-stg.", "name": "STG" }`. |
 | `jira` | `{ site, jql }`: your Jira Cloud site, like `https://example.atlassian.net`, and optionally the search. The default search is your open tickets. Requires `JIRA_API_USER` and `JIRA_API_TOKEN` in `~/.config/claude-console/env`. |

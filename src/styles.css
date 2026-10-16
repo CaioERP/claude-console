@@ -1077,6 +1077,15 @@ h2 {
   white-space: nowrap;
 }
 
+.wt-repo {
+  margin-right: 0.5rem;
+  padding: 0 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
 .wt-touched {
   color: var(--ink-2);
   font-size: 0.85rem;

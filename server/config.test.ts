@@ -6,14 +6,26 @@ describe('resolveConfig', () => {
   it('turns every optional integration off by default', () => {
     const config = resolveConfig({}, {})
 
-    expect(config.repo).toBe('')
+    expect(config.repos).toEqual([])
     expect(config.brand).toEqual({ title: 'Claude Console', icon: '' })
     expect(config.devServer.process).toBe('webpack')
+    expect(config.terminal).toBe('ghostty')
     expect([config.devEnv, config.jira, config.reviewQueue]).toEqual([null, null, null])
   })
 
-  it('lets CONSOLE_REPO override the configured repository', () => {
-    expect(resolveConfig({ repo: '/a' }, { CONSOLE_REPO: '/b' }).repo).toBe('/b')
+  it('lets CONSOLE_REPO override the configured repositories', () => {
+    expect(resolveConfig({ repo: '/a' }, { CONSOLE_REPO: '/b:/c' }).repos).toEqual(['/b', '/c'])
+  })
+
+  it('accepts one repository, a list, or both keys, without duplicates', () => {
+    expect(resolveConfig({ repo: '/a' }, {}).repos).toEqual(['/a'])
+    expect(resolveConfig({ repo: ['/a', '/b'] }, {}).repos).toEqual(['/a', '/b'])
+    expect(resolveConfig({ repo: '/a', repos: ['/a/', '/b'] }, {}).repos).toEqual(['/a', '/b'])
+  })
+
+  it('accepts a known terminal and falls back to Ghostty otherwise', () => {
+    expect(resolveConfig({ terminal: 'terminator' }, {}).terminal).toBe('terminator')
+    expect(resolveConfig({ terminal: 'xterm' as never }, {}).terminal).toBe('ghostty')
   })
 
   it('fills in the Jira query and the review queue defaults', () => {

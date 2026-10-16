@@ -38,7 +38,8 @@ for tool in xdotool wmctrl; do
 	command -v "$tool" >/dev/null 2>&1 || echo "Optional: install $tool to size and focus the console window." >&2
 done
 
-command -v ghostty >/dev/null 2>&1 || echo "Optional: the Resume and worktree buttons open tabs in Ghostty, which is not installed." >&2
+command -v ghostty >/dev/null 2>&1 || command -v terminator >/dev/null 2>&1 \
+	|| echo "Optional: the Resume and worktree buttons open tabs in Ghostty or Terminator (\"terminal\" in config.json); neither is installed." >&2
 
 (cd "$app" && npm ci --no-audit --no-fund)
 

@@ -9,14 +9,16 @@ import type { ConsoleFeatures } from '../shared/types'
 export type EnvRule = { match: string; name: string }
 
 export type ConsoleConfig = {
-  // The git repository whose worktrees the console lists.
-  repo: string
+  // The git repositories whose worktrees the console lists.
+  repos: string[]
   brand: {
     // The name in the header and the window title.
     title: string
     // An SVG or PNG shown before the title, read from this machine. Optional.
     icon: string
   }
+  // The terminal the console opens worktrees and resumes sessions in.
+  terminal: Terminal
   // A listening process whose command line contains this text counts as the
   // worktree's dev server.
   devServer: { process: string }
@@ -42,11 +44,20 @@ export type ConsoleConfig = {
   } | null
 }
 
+// The terminals the console can open tabs in, each with a desktop/<name>-tab script.
+const TERMINALS = ['ghostty', 'terminator'] as const
+
+export type Terminal = (typeof TERMINALS)[number]
+
 export const CONFIG_DIR = join(homedir(), '.config', 'claude-console')
 
+// The file accepts "repo" as one path or a list, and "repos" as a list.
+type ConfigFile = Partial<Omit<ConsoleConfig, 'repos'>> & { repo?: string | string[]; repos?: string[] }
+
 const DEFAULTS: ConsoleConfig = {
-  repo: '',
+  repos: [],
   brand: { title: 'Claude Console', icon: '' },
+  terminal: 'ghostty',
   devServer: { process: 'webpack' },
   devEnv: null,
   jira: null,
@@ -58,11 +69,11 @@ const DEFAULT_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER B
 
 const expand = (path: string) => (path.startsWith('~/') ? join(homedir(), path.slice(2)) : path)
 
-const readConfigFile = (): { path: string; values: Partial<ConsoleConfig> } => {
+const readConfigFile = (): { path: string; values: ConfigFile } => {
   const path = process.env.CONSOLE_CONFIG || join(CONFIG_DIR, 'config.json')
 
   try {
-    return { path, values: JSON.parse(readFileSync(path, 'utf8')) as Partial<ConsoleConfig> }
+    return { path, values: JSON.parse(readFileSync(path, 'utf8')) as ConfigFile }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, values: {} }
 
@@ -70,16 +81,19 @@ const readConfigFile = (): { path: string; values: Partial<ConsoleConfig> } => {
   }
 }
 
-// Fills in defaults, expands "~/", and lets CONSOLE_REPO override the repository.
-export const resolveConfig = (values: Partial<ConsoleConfig>, env: NodeJS.ProcessEnv = process.env): ConsoleConfig => {
-  const repo = env.CONSOLE_REPO || values.repo || DEFAULTS.repo
+// Fills in defaults, expands "~/", and lets CONSOLE_REPO (paths separated by
+// ":") override the repositories.
+export const resolveConfig = (values: ConfigFile, env: NodeJS.ProcessEnv = process.env): ConsoleConfig => {
+  const listed = env.CONSOLE_REPO ? env.CONSOLE_REPO.split(':') : [values.repo ?? [], values.repos ?? []].flat()
+  const repos = [...new Set(listed.map(r => r.trim()).filter(Boolean).map(r => resolve(expand(r))))]
 
   return {
-    repo: repo ? resolve(expand(repo)) : '',
+    repos,
     brand: {
       title: values.brand?.title || DEFAULTS.brand.title,
       icon: values.brand?.icon ? resolve(expand(values.brand.icon)) : '',
     },
+    terminal: values.terminal && TERMINALS.includes(values.terminal) ? values.terminal : DEFAULTS.terminal,
     devServer: { process: values.devServer?.process || DEFAULTS.devServer.process },
     devEnv: values.devEnv
       ? { files: values.devEnv.files ?? [], key: values.devEnv.key ?? '', rules: values.devEnv.rules ?? [] }

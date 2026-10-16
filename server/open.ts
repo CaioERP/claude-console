@@ -2,6 +2,8 @@ import { execFile, spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 
+import { config } from './config'
+
 const ALLOWED = /^(https?|ghosttycd):/i
 const DESKTOP_VARS = ['DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']
 
@@ -32,11 +34,11 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export const isSessionId = (value: string) => SESSION_ID.test(value)
 
-const GHOSTTY_TAB = join(process.cwd(), 'desktop', 'ghostty-tab')
+const TERMINAL_TAB = join(process.cwd(), 'desktop', `${config.terminal}-tab`)
 
-// Opens a new tab in the main Ghostty window inside dir, resuming the session
+// Opens a new tab of the configured terminal inside dir, resuming the session
 // when one is given. The page only names a folder and a session id; the command
-// itself is built by the ghostty-tab script, never taken from the request.
+// itself is built by the terminal's -tab script, never taken from the request.
 export const openTerminal = async (dir: string, session = '') => {
   if (!isAbsolute(dir) || !(await stat(dir).then(s => s.isDirectory(), () => false))) {
     throw new Error(`Not a directory: ${dir}`)
@@ -45,12 +47,12 @@ export const openTerminal = async (dir: string, session = '') => {
   if (session && !isSessionId(session)) throw new Error(`Not a session id: ${session}`)
 
   const env = { ...process.env, ...(await desktopEnv()) }
-  const child = spawn(GHOSTTY_TAB, session ? [dir, session] : [dir], { env, detached: true, stdio: 'ignore' })
+  const child = spawn(TERMINAL_TAB, session ? [dir, session] : [dir], { env, detached: true, stdio: 'ignore' })
 
   child.unref()
 }
 
-// Opens a new tab in the main Ghostty window inside dir and starts a new Claude
+// Opens a new tab of the configured terminal inside dir and starts a new Claude
 // Code session there, with prompt as its first message when given.
 export const startSession = async (dir: string, prompt = '') => {
   if (!isAbsolute(dir) || !(await stat(dir).then(s => s.isDirectory(), () => false))) {
@@ -58,7 +60,7 @@ export const startSession = async (dir: string, prompt = '') => {
   }
 
   const env = { ...process.env, ...(await desktopEnv()) }
-  const child = spawn(GHOSTTY_TAB, ['--new', dir, ...(prompt ? [prompt] : [])], { env, detached: true, stdio: 'ignore' })
+  const child = spawn(TERMINAL_TAB, ['--new', dir, ...(prompt ? [prompt] : [])], { env, detached: true, stdio: 'ignore' })
 
   child.unref()
 }

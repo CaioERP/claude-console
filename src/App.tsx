@@ -499,12 +499,12 @@ const copyAction = (label: string, text: string): MenuAction => ({
   run: async () => ((await copy(text)) ? 'Copied' : 'Copy failed'),
 })
 
-const ghosttyAction = (label: string, dir: string, session?: string): MenuAction => ({
+const terminalAction = (label: string, dir: string, session?: string): MenuAction => ({
   label,
-  run: async () => ((await openTab(dir, session).catch(() => false)) ? 'Opened in Ghostty' : 'Could not open Ghostty'),
+  run: async () => ((await openTab(dir, session).catch(() => false)) ? 'Opened in the terminal' : 'Could not open the terminal'),
 })
 
-// Starts a new Claude Code session in a new Ghostty tab: an empty one in a
+// Starts a new Claude Code session in a new terminal tab: an empty one in a
 // worktree, or the configured one in the repository.
 const startSession = async (body: { dir?: string; input?: string }): Promise<true | string> => {
   const response = await fetch('/api/session/new', {
@@ -677,7 +677,7 @@ const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
 
 // The "+" beside the session search. It opens a modal that says what will be
 // created, asks for a ticket or a name when the configured first message needs
-// one, and starts the Claude Code session in a new Ghostty tab on confirming.
+// one, and starts the Claude Code session in a new terminal tab on confirming.
 const NewSessionButton = ({
   setup,
   repo,
@@ -726,7 +726,7 @@ const NewSessionButton = ({
 
     if (outcome === true) {
       close()
-      setNote('Started in Ghostty')
+      setNote('Started in the terminal')
     } else {
       setError(outcome)
     }
@@ -776,7 +776,7 @@ const NewSessionButton = ({
             }}
           >
             <p className="modal-text">
-              {setup.description || 'Starts a new Claude Code session in the repository.'} It opens in a new Ghostty tab.
+              {setup.description || 'Starts a new Claude Code session in the repository.'} It opens in a new terminal tab.
             </p>
             {setup.needsInput && (
               <label className="modal-field">
@@ -949,7 +949,7 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   const command = session.resumeDir ? resumeCommand(session) : ''
   const actions: MenuAction[] = [
     {
-      ...ghosttyAction('Resume in Ghostty', session.resumeDir, session.id),
+      ...terminalAction('Resume in terminal', session.resumeDir, session.id),
       disabled: !session.resumeDir || session.isRunning,
       hint: !session.resumeDir
         ? 'No transcript to resume'
@@ -964,7 +964,7 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
     },
   ]
 
-  if (session.top) actions.push(ghosttyAction('Open worktree in Ghostty', session.top))
+  if (session.top) actions.push(terminalAction('Open worktree in terminal', session.top))
 
   if (tree?.devServerPort) {
     actions.push({
@@ -1052,9 +1052,9 @@ const worktreeActions = (worktree: Worktree): MenuAction[] => {
   const actions: MenuAction[] = [
     {
       label: 'Start session here',
-      run: async () => ((await startSession({ dir: worktree.path })) === true ? 'Started in Ghostty' : 'Could not start'),
+      run: async () => ((await startSession({ dir: worktree.path })) === true ? 'Started in the terminal' : 'Could not start'),
     },
-    ghosttyAction('Open in Ghostty', worktree.path),
+    terminalAction('Open in terminal', worktree.path),
   ]
 
   if (worktree.devServerPort) {
@@ -1152,13 +1152,16 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         <a
           className="wt-name"
           href={`ghosttycd://${worktree.path}`}
-          title={`Open ${worktree.path} in Ghostty`}
+          title={`Open ${worktree.path} in the terminal`}
           tabIndex={isDeleting ? -1 : undefined}
         >
           {worktree.name}
         </a>
         <code className="wt-branch">{worktree.isDetached ? `detached at ${worktree.sha}` : worktree.branch}</code>
-        <span className="wt-subject">{worktree.subject}</span>
+        <span className="wt-subject">
+          {worktree.repoName && <span className="wt-repo">{worktree.repoName}</span>}
+          {worktree.subject}
+        </span>
       </span>
       <ActivityStrip days={worktree.activityDays} />
       <span className="wt-touched" title={new Date(worktree.lastTouchedAt).toLocaleString()}>
@@ -1212,7 +1215,7 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
   )
   const shown = worktrees
     .filter(w => filter === 'all' || w.activity === filter)
-    .filter(w => !query || `${w.name} ${w.branch} ${w.subject}`.toLowerCase().includes(query.toLowerCase()))
+    .filter(w => !query || `${w.name} ${w.repoName} ${w.branch} ${w.subject}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)
 
   return (
@@ -3027,7 +3030,7 @@ const UsageCard = ({ usage, now }: { usage: Usage | null; now: number }) => {
   )
 }
 
-// Opens a folder in a new tab of the main Ghostty window, resuming a Claude
+// Opens a folder in a new tab of the configured terminal, resuming a Claude
 // Code session there when one is named.
 const openTab = async (dir: string, session?: string) => {
   const response = await fetch('/api/terminal', {
