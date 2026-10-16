@@ -44,6 +44,7 @@ import {
   type PrEvent,
 } from './format'
 import { MemoryGraph } from './MemoryGraph'
+import { ServicesPanel } from './Services'
 import { StartWorkButton } from './StartWork'
 import { TicketChip, TicketLink, TicketView } from './TicketView'
 import { TicketKeys, useTicketParam } from './tickets'
@@ -3230,6 +3231,7 @@ export const App = () => {
             <MemoryCard notes={snapshot.memory} now={now} />
           </div>
           <div className="column">
+            {snapshot.features.services && <ServicesPanel sessions={snapshot.sessions} now={now} />}
             <ProfileCard profile={snapshot.profile} />
             <ContributionsCard contributions={snapshot.contributions} />
             <UsageCard usage={snapshot.usage} now={now} />

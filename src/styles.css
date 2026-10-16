@@ -2717,3 +2717,73 @@ a.jira-summary-text:hover,
 a.card-summary:hover {
   text-decoration: underline;
 }
+
+/* Services */
+
+.service-list,
+.service-containers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.service-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.service-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.service-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 1px solid var(--ink-3);
+}
+
+.service[data-state='up'] .service-dot {
+  background: var(--moss);
+  border-color: var(--moss);
+}
+
+.service[data-state='partial'] .service-dot {
+  border-color: var(--moss);
+}
+
+.service-state,
+.service-origin,
+.service-containers {
+  color: var(--ink-2);
+  font-size: 0.85rem;
+}
+
+.service-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.service-origin,
+.service-reminder {
+  display: block;
+  margin: 0.2rem 0 0 1.05rem;
+}
+
+.service-reminder {
+  font-size: 0.85rem;
+  color: var(--amber, var(--ink));
+}
+
+.service-containers {
+  margin: 0.3rem 0 0 1.05rem;
+}
+
+.service-ports {
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
