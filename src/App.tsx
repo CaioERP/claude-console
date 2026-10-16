@@ -44,10 +44,11 @@ import {
   type PrEvent,
 } from './format'
 import { MemoryGraph } from './MemoryGraph'
+import { useScrollEdges } from './scrollEdges'
 import { ServicesPanel } from './Services'
 import { StartWorkButton } from './StartWork'
 import { TicketChip, TicketLink, TicketView } from './TicketView'
-import { TicketKeys, useTicketParam } from './tickets'
+import { TicketKeys, useTicketHistory, useTicketParam } from './tickets'
 
 const POLL_MS = 10_000
 const THEME_KEY = 'claude-console:theme'
@@ -1993,6 +1994,7 @@ const JiraTickets = ({
     ) : null
 
   const [view, setView] = useState<JiraView>(readJiraView)
+  const boardRef = useScrollEdges<HTMLDivElement>()
   const statuses = orderStatuses(issues.map(i => ({ status: i.status, category: i.statusCategory })))
   const byStatus = new Map(
     statuses.map(status => [
@@ -2072,7 +2074,7 @@ const JiraTickets = ({
           )
         })
       ) : (
-        <div className="board" role="list" aria-label="Jira board">
+        <div ref={boardRef} className="board" role="list" aria-label="Jira board">
           {statuses.map(status => {
             const list = byStatus.get(status)!
 
@@ -2091,10 +2093,11 @@ const JiraTickets = ({
                         <a className="jira-key" href={issue.url}>
                           {issue.key}
                         </a>
-                        <span className="card-type">{issue.type}</span>
-                        {setupFor(issue, links)}
+                        <span className="card-type" title={issue.type}>
+                          {issue.type}
+                        </span>
                       </span>
-                      <TicketLink ticketKey={issue.key} className="card-summary">
+                      <TicketLink ticketKey={issue.key} className="card-summary" title={issue.summary}>
                         {issue.summary}
                       </TicketLink>
                       {issue.parentKey && (
@@ -2105,7 +2108,10 @@ const JiraTickets = ({
                       <span className="card-links">
                         <IssueLinks links={links} />
                       </span>
-                      <span className="card-updated">updated {ago(issue.updatedAt, now)}</span>
+                      <span className="card-foot">
+                        <span className="card-updated">updated {ago(issue.updatedAt, now)}</span>
+                        {setupFor(issue, links)}
+                      </span>
                     </li>
                     )
                   })}
@@ -3119,6 +3125,8 @@ export const App = () => {
   const { snapshot, error, isRefreshing, isFetching, refresh } = useSnapshot()
   const now = useNow()
   const [ticket] = useTicketParam()
+
+  useTicketHistory()
 
   useSessionFromUrl(!!snapshot)
 

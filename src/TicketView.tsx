@@ -13,11 +13,21 @@ export const TicketChip = ({ text }: { text: string }) => {
   return key ? <TicketLink ticketKey={key} className="tag ticket-chip" /> : null
 }
 
-export const TicketLink = ({ ticketKey, className, children }: { ticketKey: string; className?: string; children?: ReactNode }) => (
+export const TicketLink = ({
+  ticketKey,
+  className,
+  title,
+  children,
+}: {
+  ticketKey: string
+  className?: string
+  title?: string
+  children?: ReactNode
+}) => (
   <a
     className={className}
     href={ticketHref(ticketKey)}
-    title={`Open everything linked to ${ticketKey}`}
+    title={title ?? `Open everything linked to ${ticketKey}`}
     onClick={event => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return
 
