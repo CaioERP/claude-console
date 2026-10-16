@@ -2591,3 +2591,55 @@ h2 {
     animation: none !important;
   }
 }
+
+/* Start Work */
+
+.start-work {
+  padding: 0 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.start-work:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+
+.start-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.start-plans,
+.start-results {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.start-plan[data-kind='blocked'] {
+  color: var(--ink-3);
+}
+
+.start-command {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+}
+
+.start-results li[data-ok='false'] {
+  color: var(--ink-2);
+}

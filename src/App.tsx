@@ -44,6 +44,7 @@ import {
   type PrEvent,
 } from './format'
 import { MemoryGraph } from './MemoryGraph'
+import { StartWorkButton } from './StartWork'
 
 const POLL_MS = 10_000
 const THEME_KEY = 'claude-console:theme'
@@ -530,7 +531,7 @@ const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), a[href], [tabind
 
 // A modal window over the page: it takes the focus and keeps Tab inside it,
 // closes on Escape or a click outside, and gives the focus back on closing.
-const Modal = ({
+export const Modal = ({
   title,
   children,
   actions,
@@ -618,10 +619,10 @@ type ConfirmRequest = {
 const CONFIRM_EVENT = 'claude-console:confirm'
 
 // Asks in a modal, the way window.confirm does, and resolves with the answer.
-const askConfirm = (request: Omit<ConfirmRequest, 'resolve'>) =>
+export const askConfirm = (request: Omit<ConfirmRequest, 'resolve'>) =>
   new Promise<boolean>(resolve => window.dispatchEvent(new CustomEvent(CONFIRM_EVENT, { detail: { ...request, resolve } })))
 
-const showNotice = async (title: string, body: ReactNode) => {
+export const showNotice = async (title: string, body: ReactNode) => {
   await askConfirm({ title, body, confirmLabel: 'OK', cancelLabel: null })
 }
 
@@ -1958,6 +1959,7 @@ const JiraTickets = ({
   sessions,
   now,
   newSession,
+  startWork,
   repo,
 }: {
   issues: JiraIssue[]
@@ -1966,12 +1968,16 @@ const JiraTickets = ({
   sessions: Session[]
   now: number
   newSession: Snapshot['features']['newSession']
+  startWork: Snapshot['features']['startWork']
   repo: string
 }) => {
-  // A ticket without a worktree yet can get one from the configured first
-  // message, with the ticket's key filled in.
+  // A ticket without a worktree yet can get one: through Start Work when it is
+  // configured, otherwise from the configured first message with the ticket's
+  // key filled in.
   const setupFor = (issue: JiraIssue, links: Links) =>
-    newSession.needsInput && !links.tree ? (
+    startWork && !links.tree ? (
+      <StartWorkButton issueKey={issue.key} repos={startWork.repos} isSmall />
+    ) : newSession.needsInput && !links.tree ? (
       <NewSessionButton
         setup={newSession}
         repo={repo}
@@ -3188,6 +3194,7 @@ export const App = () => {
                 sessions={snapshot.sessions}
                 now={now}
                 newSession={snapshot.features.newSession}
+                startWork={snapshot.features.startWork}
                 repo={snapshot.repo}
               />
             )}
