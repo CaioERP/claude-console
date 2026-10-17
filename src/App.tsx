@@ -2372,18 +2372,61 @@ const SessionPrs = ({ session, prs, queue }: { session: Session; prs: PullReques
   )
 }
 
+// The session's published Artifacts, behind a small orange square next to its
+// title: hovering or focusing it lists them, and the list stays open while the
+// pointer is over it, so its links can be clicked.
 const SessionArtifacts = ({ session, artifacts }: { session: Session; artifacts: PublishedArtifact[] }) => {
   const mine = artifacts.filter(artifact => artifact.sessionIds.includes(session.id))
+  const [isOpen, setIsOpen] = useState(false)
+  const closing = useRef<ReturnType<typeof setTimeout>>()
+  const id = useId()
 
   if (mine.length === 0) return null
 
+  const open = () => {
+    clearTimeout(closing.current)
+    setIsOpen(true)
+  }
+  const close = () => {
+    clearTimeout(closing.current)
+    closing.current = setTimeout(() => setIsOpen(false), 180)
+  }
+
   return (
-    <span className="session-prs">
-      {mine.map(artifact => (
-        <a key={artifact.url} className="tag tag-artifact" href={artifact.url} data-tooltip={`Artifact: ${artifact.title}`}>
-          {artifact.title}
-        </a>
-      ))}
+    <span
+      className="artifact-badge"
+      onMouseEnter={open}
+      onMouseLeave={close}
+      onFocus={open}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close()
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Escape') setIsOpen(false)
+      }}
+    >
+      <button
+        type="button"
+        className="artifact-badge-button"
+        aria-label={`${plural(mine.length, 'artifact')} published from this session`}
+        aria-expanded={isOpen}
+        aria-controls={id}
+        onClick={() => setIsOpen(v => !v)}
+      >
+        <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
+          <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />
+        </svg>
+      </button>
+      {isOpen && (
+        <span className="artifact-popover" id={id} role="dialog" aria-label="Artifacts of this session">
+          <span className="artifact-popover-title">{plural(mine.length, 'artifact')}</span>
+          {mine.map(artifact => (
+            <a key={artifact.url} className="artifact-popover-link" href={artifact.url}>
+              {artifact.title}
+            </a>
+          ))}
+        </span>
+      )}
     </span>
   )
 }
@@ -2441,6 +2484,7 @@ const SessionRow = ({
             <StarIcon />
           </button>
         )}
+        <SessionArtifacts session={session} artifacts={artifacts} />
       </span>
       <span className="ctx" data-tooltip={`Context ${session.ctx}% used`}>
         <span className="ctx-bar">
@@ -2448,6 +2492,7 @@ const SessionRow = ({
         </span>
         {session.ctx}%
         <SessionCost cost={cost} />
+        {session.model && <span className="tag model-tag">{session.model.toLowerCase()}</span>}
       </span>
       <span className="session-foot">
         {worktree.name && (
@@ -2459,14 +2504,11 @@ const SessionRow = ({
           </span>
         )}
         <SessionPrs session={session} prs={prs} queue={queue} />
-        <SessionArtifacts session={session} artifacts={artifacts} />
         <span className="session-seen" data-status={session.isRunning ? session.runStatus : undefined}>
           {session.isRunning && session.runStatus === 'busy' ? (
             <Thinking sessionId={session.id} since={session.runSince} />
           ) : session.isRunning ? (
-            [RUN_STATUS[session.runStatus] ?? 'Running', session.model].filter(Boolean).join(', ')
-          ) : session.isLive ? (
-            session.model
+            RUN_STATUS[session.runStatus] ?? 'Running'
           ) : (
             ago(session.seenAt, now)
           )}

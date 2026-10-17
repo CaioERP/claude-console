@@ -1726,6 +1726,77 @@ h2 {
   color: var(--ink);
 }
 
+.artifact-badge {
+  position: relative;
+  display: inline-grid;
+}
+
+.artifact-badge-button {
+  display: grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--claude);
+}
+
+.artifact-badge-button:hover,
+.artifact-badge-button[aria-expanded='true'] {
+  color: var(--amber);
+}
+
+.artifact-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: -0.5rem;
+  z-index: 20;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 14rem;
+  max-width: min(26rem, 70vw);
+  padding: 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.artifact-popover::before {
+  /* Bridges the gap to the button, so moving the pointer down keeps it open. */
+  content: '';
+  position: absolute;
+  inset: -6px 0 auto;
+  height: 6px;
+}
+
+.artifact-popover-title {
+  padding: 0.1rem 0.35rem 0.25rem;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+}
+
+.artifact-popover-link {
+  overflow: hidden;
+  padding: 0.3rem 0.35rem;
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 0.85rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-popover-link:hover,
+.artifact-popover-link:focus-visible {
+  background: var(--bg);
+}
+
+.model-tag {
+  margin-left: 0.15rem;
+  font-variant-numeric: normal;
+}
+
 .favorite-star {
   display: inline-grid;
   place-items: center;
