@@ -9,6 +9,7 @@ import { isWindowAction, openExternally, openTerminal, startSession, windowActio
 import { endSession } from './end'
 import { readBattery } from './system'
 import { diskUsage, refreshDiskFree } from './disk'
+import { currentPet, petOptions, petSettings, readPetFile, savePetSettings } from './pets'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -274,11 +275,58 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     return
   }
 
+  if (url.pathname === '/api/pet-settings') {
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+
+    if (req.method === 'POST') {
+      if (!isFromConsole(req)) {
+        res.statusCode = 403
+        res.end()
+        return
+      }
+
+      try {
+        const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+        const settings = await savePetSettings({
+          ...(typeof body.isEnabled === 'boolean' ? { isEnabled: body.isEnabled } : {}),
+          ...(typeof body.kind === 'string' ? { kind: body.kind } : {}),
+          ...(typeof body.color === 'string' ? { color: body.color } : {}),
+          ...(typeof body.size === 'number' ? { size: body.size } : {}),
+        })
+
+        res.end(JSON.stringify({ settings, pet: await currentPet() }))
+      } catch (error) {
+        res.statusCode = 400
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+      }
+      return
+    }
+
+    res.end(JSON.stringify({ settings: await petSettings(), options: await petOptions() }))
+    return
+  }
+
+  if (url.pathname.startsWith('/api/pet/')) {
+    const data = await readPetFile(decodeURIComponent(url.pathname.slice('/api/pet/'.length)))
+
+    if (!data) {
+      res.statusCode = 404
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'image/gif')
+    res.setHeader('Cache-Control', 'max-age=86400')
+    res.end(data)
+    return
+  }
+
   if (url.pathname === '/api/system') {
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Cache-Control', 'no-store')
     await refreshDiskFree(REPO)
-    res.end(JSON.stringify({ battery: await readBattery(), disk: diskUsage() }))
+    res.end(JSON.stringify({ battery: await readBattery(), disk: diskUsage(), pet: await currentPet() }))
     return
   }
 

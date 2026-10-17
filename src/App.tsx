@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
 
 import type {
+  PetOptions,
+  PetSettings,
+  Pet,
   DiskUsage,
   ClaudeKnowledge,
   Extension,
@@ -70,9 +73,14 @@ const readTheme = (): Theme => {
 }
 
 const SYSTEM_POLL_MS = 30_000
+const SYSTEM_REFRESH = 'claude-console:system-refresh'
 
 const useSystem = () => {
-  const [system, setSystem] = useState<{ battery: Battery | null; disk: DiskUsage | null }>({ battery: null, disk: null })
+  const [system, setSystem] = useState<{ battery: Battery | null; disk: DiskUsage | null; pet: Pet | null }>({
+    battery: null,
+    disk: null,
+    pet: null,
+  })
 
   useEffect(() => {
     let isActive = true
@@ -81,7 +89,7 @@ const useSystem = () => {
       try {
         const response = await fetch('/api/system')
 
-        if (response.ok && isActive) setSystem((await response.json()) as { battery: Battery | null; disk: DiskUsage | null })
+        if (response.ok && isActive) setSystem((await response.json()) as { battery: Battery | null; disk: DiskUsage | null; pet: Pet | null })
       } catch {
         // Keep the last reading until the server answers again.
       }
@@ -89,10 +97,14 @@ const useSystem = () => {
 
     void load()
     const timer = setInterval(() => void load(), SYSTEM_POLL_MS)
+    const onRefresh = () => void load()
+
+    window.addEventListener(SYSTEM_REFRESH, onRefresh)
 
     return () => {
       isActive = false
       clearInterval(timer)
+      window.removeEventListener(SYSTEM_REFRESH, onRefresh)
     }
   }, [])
 
@@ -178,6 +190,247 @@ const WorktreeDisk = ({ usage }: { usage: DiskUsage }) => {
   )
 }
 
+const PET_SPEED = 26
+const PET_RUN_SPEED = 110
+const PET_MARGIN = 20
+const BALL_SIZE = 9
+const GRAVITY = 1400
+const BOUNCE = 0.55
+const BALL_EVENT = 'claude-console:throw-ball'
+const MAX_BALLS = 5
+
+type PetAction = 'walk' | 'idle' | 'lie' | 'run' | 'play'
+
+// A pet from vscode-pets walking the empty stretch of the window bar between
+// the title and the status: it strolls to a random spot, then stands or lies
+// down for a while, turning to face where it goes. A click on the empty bar
+// drops a ball there, up to five at a time; each bounces to the floor, and the
+// pet fetches them one by one, nearest first, playing with each before the next. Everything moves straight on the elements each frame, never through
+// React, and nothing moves when motion is reduced.
+const WalkingPet = ({
+  pet,
+  bar,
+  title,
+  status,
+}: {
+  pet: Pet
+  bar: RefObject<HTMLDivElement>
+  title: RefObject<HTMLHeadingElement>
+  status: RefObject<HTMLDivElement>
+}) => {
+  const sprite = useRef<HTMLImageElement>(null)
+  const ballNodes = useRef<Array<HTMLSpanElement | null>>([])
+  const [action, setAction] = useState<PetAction>('idle')
+  const pathOf = (which: PetAction) =>
+    (which === 'lie' && pet.lie) ||
+    (which === 'run' && (pet.run || pet.walk)) ||
+    (which === 'play' && (pet.withBall || pet.idle)) ||
+    (which === 'walk' ? pet.walk : pet.idle)
+
+  useEffect(() => {
+    for (const path of [pet.walk, pet.idle, pet.lie, pet.run, pet.withBall].filter(Boolean)) new Image().src = `/api/pet/${path}`
+  }, [pet])
+
+  useEffect(() => {
+    const lane = { left: 0, right: 0, floor: 0 }
+    const measure = () => {
+      if (!bar.current || !title.current || !status.current) return
+
+      const box = bar.current.getBoundingClientRect()
+      const width = sprite.current?.getBoundingClientRect().width || pet.size
+
+      lane.left = title.current.getBoundingClientRect().right - box.left + PET_MARGIN
+      lane.right = status.current.getBoundingClientRect().left - box.left - PET_MARGIN - width
+      lane.floor = box.height - BALL_SIZE - 3
+    }
+    const observer = new ResizeObserver(measure)
+
+    if (bar.current) observer.observe(bar.current)
+    if (status.current) observer.observe(status.current)
+
+    measure()
+
+    const spriteWidth = () => sprite.current?.getBoundingClientRect().width || pet.size
+    let x = lane.left + Math.max(0, lane.right - lane.left) * Math.random()
+    let target = x
+    let facing = 1
+    let mode: PetAction = 'idle'
+    let until = performance.now() + 1500
+    let last = performance.now()
+    let frame = 0
+    // The balls in play: where each is, how fast it falls, whether it rests.
+    type Ball = { x: number; y: number; vy: number; isResting: boolean }
+    const balls: Ball[] = []
+    let chasing: Ball | null = null
+
+    const place = () => {
+      const node = sprite.current
+
+      if (node) {
+        node.style.visibility = lane.right - lane.left < 40 ? 'hidden' : 'visible'
+        node.style.transform = `translateX(${Math.round(x)}px) scaleX(${facing})`
+      }
+
+      ballNodes.current.forEach((dot, at) => {
+        const ball = balls[at]
+
+        if (!dot) return
+
+        dot.style.display = ball ? 'block' : 'none'
+
+        if (ball) dot.style.transform = `translate(${Math.round(ball.x - BALL_SIZE / 2)}px, ${Math.round(ball.y)}px)`
+      })
+    }
+
+    const become = (next: PetAction) => {
+      mode = next
+      setAction(next)
+    }
+
+    // Runs to the nearest ball left, if any.
+    const chaseNext = () => {
+      const width = spriteWidth()
+      const center = x + width / 2
+      const next = [...balls].sort((a, b) => Math.abs(a.x - center) - Math.abs(b.x - center))[0]
+
+      if (!next) return false
+
+      chasing = next
+      target = next.x - width / 2
+      facing = target >= x ? 1 : -1
+      become('run')
+
+      return true
+    }
+
+    const onThrow = (event: Event) => {
+      if (balls.length >= MAX_BALLS) return
+
+      const { x: at, y } = (event as CustomEvent<{ x: number; y: number }>).detail
+      const width = spriteWidth()
+      const ballX = Math.min(Math.max(at, lane.left + width / 2), lane.right + width / 2)
+
+      balls.push({ x: ballX, y: Math.min(Math.max(0, y - BALL_SIZE / 2), lane.floor), vy: 0, isResting: false })
+
+      // Already fetching or playing, it gets to this one afterward.
+      if (mode !== 'run' && mode !== 'play') chaseNext()
+
+      place()
+    }
+
+    window.addEventListener(BALL_EVENT, onThrow)
+
+    if (prefersReducedMotion()) {
+      place()
+
+      return () => {
+        observer.disconnect()
+        window.removeEventListener(BALL_EVENT, onThrow)
+      }
+    }
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000)
+
+      last = now
+      x = Math.min(Math.max(x, lane.left), Math.max(lane.left, lane.right))
+
+      for (const ball of balls) {
+        if (ball.isResting) continue
+
+        ball.vy += GRAVITY * dt
+        ball.y += ball.vy * dt
+
+        if (ball.y >= lane.floor) {
+          ball.y = lane.floor
+          ball.vy = -ball.vy * BOUNCE
+
+          if (Math.abs(ball.vy) < 60) {
+            ball.vy = 0
+            ball.isResting = true
+          }
+        }
+      }
+
+      if (mode === 'walk' || mode === 'run') {
+        const step = (mode === 'run' ? PET_RUN_SPEED : PET_SPEED) * dt
+        const gap = target - x
+
+        if (Math.abs(gap) <= step) {
+          x = target
+
+          if (mode === 'run') {
+            if (chasing) balls.splice(balls.indexOf(chasing), 1)
+
+            chasing = null
+            become('play')
+            // A short play while more balls wait, a longer one after the last.
+            until = now + (balls.length ? 900 : 2500 + Math.random() * 1500)
+          } else {
+            const lies = !!pet.lie && Math.random() < 0.3
+
+            become(lies ? 'lie' : 'idle')
+            until = now + (lies ? 5000 + Math.random() * 6000 : 1500 + Math.random() * 3500)
+          }
+        } else {
+          x += Math.sign(gap) * step
+        }
+      } else if (now >= until && !chaseNext()) {
+        target = lane.left + Math.max(0, lane.right - lane.left) * Math.random()
+        facing = target >= x ? 1 : -1
+        become('walk')
+      }
+
+      place()
+      frame = requestAnimationFrame(tick)
+    }
+
+    frame = requestAnimationFrame(tick)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener(BALL_EVENT, onThrow)
+    }
+  }, [pet, bar, title, status])
+
+  return (
+    <div className="pet-lane" aria-hidden="true">
+      {Array.from({ length: MAX_BALLS }, (_, at) => (
+        <span
+          key={at}
+          ref={node => {
+            ballNodes.current[at] = node
+          }}
+          className="pet-ball"
+        />
+      ))}
+      <img
+        ref={sprite}
+        className="pet"
+        src={`/api/pet/${pathOf(action)}`}
+        alt=""
+        width={pet.size}
+        style={{ width: pet.size }}
+        data-tooltip={`${pet.credit}. Click the empty bar to throw it balls, up to five at a time.`}
+        draggable={false}
+      />
+    </div>
+  )
+}
+
+// A click on the bar itself, not on its title, status or buttons, throws the
+// pet a ball where it landed.
+const throwBall = (event: ReactMouseEvent<HTMLDivElement>) => {
+  const barNode = event.currentTarget
+
+  if (event.target !== barNode && !(event.target as Element).classList.contains('pet-lane')) return
+
+  const box = barNode.getBoundingClientRect()
+
+  window.dispatchEvent(new CustomEvent(BALL_EVENT, { detail: { x: event.clientX - box.left, y: event.clientY - box.top } }))
+}
+
 const closeWindow = async () => {
   window.close()
 
@@ -236,19 +489,23 @@ const toggleMaximized = async () => {
 // A title bar in the manner of a desktop window: the console's name on the left,
 // the battery, the time, and maximize and close buttons on the right.
 const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
-  const { battery, disk } = useSystem()
+  const { battery, disk, pet } = useSystem()
+  const bar = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const statusRef = useRef<HTMLDivElement>(null)
   const now = useClock()
   const isMaximized = useIsMaximized()
   const [windowError, setWindowError] = useState('')
   const date = new Date(now)
 
   return (
-    <div className="window-bar">
-      <h1 className="win-title">
+    <div className="window-bar" ref={bar} onClick={pet ? throwBall : undefined} data-has-pet={pet ? true : undefined}>
+      {pet && <WalkingPet pet={pet} bar={bar} title={titleRef} status={statusRef} />}
+      <h1 className="win-title" ref={titleRef}>
         {hasIcon && <img className="brand-mark" src="/api/brand-icon" alt="" width={18} height={18} />}
         {title}
       </h1>
-      <div className="win-status">
+      <div className="win-status" ref={statusRef}>
         {windowError && (
           <span className="win-error" role="alert">
             {windowError}
@@ -4195,14 +4452,171 @@ const TooltipLayer = () => {
   )
 }
 
-type PageTab = 'dashboard' | 'knowledge'
+type PageTab = 'dashboard' | 'knowledge' | 'settings'
 
+
+const titleCase = (word: string) => word.charAt(0).toUpperCase() + word.slice(1)
+
+// The window bar's pet: on or off, which pet, and which color, each either fixed
+// or drawn at random. Changes apply at once.
+const PetSettingsCard = () => {
+  const [settings, setSettings] = useState<PetSettings | null>(null)
+  const [options, setOptions] = useState<PetOptions>({})
+  const [error, setError] = useState('')
+  const [isLoadingOptions, setIsLoadingOptions] = useState(true)
+  const [size, setSize] = useState(30)
+  // Only the answer to the latest save counts; an earlier one arriving late
+  // must not undo a newer choice.
+  const lastSave = useRef(0)
+
+  useEffect(() => {
+    fetch('/api/pet-settings')
+      .then(response => response.json() as Promise<{ settings: PetSettings; options: PetOptions }>)
+      .then(body => {
+        setSettings(body.settings)
+        setSize(body.settings.size)
+        setOptions(body.options)
+      })
+      .catch(() => setError('The pet settings could not be read.'))
+      .finally(() => setIsLoadingOptions(false))
+  }, [])
+
+  const save = async (change: Partial<PetSettings>) => {
+    if (!settings) return
+
+    const previous = settings
+    const id = (lastSave.current += 1)
+
+    setSettings({ ...settings, ...change })
+    setError('')
+
+    const response = await fetch('/api/pet-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+      body: JSON.stringify(change),
+    }).catch(() => null)
+    const body = ((await response?.json().catch(() => null)) ?? {}) as { settings?: PetSettings; error?: string }
+
+    if (id !== lastSave.current) return
+
+    if (response?.ok && body.settings) {
+      setSettings(body.settings)
+      window.dispatchEvent(new Event(SYSTEM_REFRESH))
+    } else {
+      setSettings(previous)
+      setError(body.error ?? 'The change could not be saved.')
+    }
+  }
+
+  const kinds = Object.keys(options).filter(kind => options[kind]!.length > 0)
+  const colors = settings?.kind ? options[settings.kind] ?? [] : []
+  const preview = settings?.kind && settings.color ? `/api/pet/${settings.kind}/${settings.color}_idle_8fps.gif` : ''
+
+  return (
+    <section className="panel pet-settings" aria-labelledby="pet-settings-title">
+      <header className="panel-head">
+        <h2 id="pet-settings-title">Pet</h2>
+      </header>
+      {!settings ? (
+        <p className="empty">{error || 'Reading the pet settings…'}</p>
+      ) : (
+        <div className="settings-form">
+          <label className="switch-row">
+            <span className="switch-text">
+              <span className="setting-label">Show a pet in the window bar</span>
+              <span className="setting-hint">
+                A pet from vscode-pets walks the empty bar; click it to throw balls.
+              </span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              className="switch"
+              aria-checked={settings.isEnabled}
+              onClick={() => void save({ isEnabled: !settings.isEnabled })}
+            >
+              <span className="switch-thumb" aria-hidden="true" />
+            </button>
+          </label>
+          <div className="setting-row" data-disabled={!settings.isEnabled || undefined}>
+            <label className="setting-field">
+              <span className="setting-label">Pet</span>
+              <select
+                value={settings.kind}
+                disabled={!settings.isEnabled || isLoadingOptions}
+                onChange={event => void save({ kind: event.target.value, color: '' })}
+              >
+                <option value="">Random each start</option>
+                {kinds.map(kind => (
+                  <option key={kind} value={kind}>
+                    {titleCase(kind.replace(/-/g, ' '))}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="setting-field">
+              <span className="setting-label">Color</span>
+              <select
+                value={settings.color}
+                disabled={!settings.isEnabled || !settings.kind}
+                onChange={event => void save({ color: event.target.value })}
+              >
+                <option value="">Random</option>
+                {colors.map(color => (
+                  <option key={color} value={color}>
+                    {titleCase(color.replace(/([a-z])(brown|gray|white)$/, '$1 $2'))}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="pet-preview" aria-hidden="true">
+              {preview ? <img src={preview} alt="" width={60} /> : <span>{settings.kind ? 'Any color' : 'Any pet'}</span>}
+            </div>
+          </div>
+          <div className="setting-field setting-size" data-disabled={!settings.isEnabled || undefined}>
+            <label className="setting-label" htmlFor="pet-size">
+              Size <output htmlFor="pet-size">{size}px</output>
+            </label>
+            <input
+              id="pet-size"
+              type="range"
+              min={16}
+              max={80}
+              step={2}
+              value={size}
+              disabled={!settings.isEnabled}
+              onChange={event => setSize(Number(event.target.value))}
+              onPointerUp={() => size !== settings.size && void save({ size })}
+              onKeyUp={() => size !== settings.size && void save({ size })}
+              aria-describedby="pet-size-hint"
+            />
+            <span id="pet-size-hint" className="setting-hint">
+              The sprite's width; 30px is the vscode-pets default. Above about 50px, taller pets go past the 40px bar.
+            </span>
+          </div>
+          {settings.isEnabled && kinds.length === 0 && !isLoadingOptions && (
+            <p className="setting-hint">
+              The pets could not be fetched from the Visual Studio Marketplace; they are tried again on the next start.
+            </p>
+          )}
+          {error && (
+            <p className="modal-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
 
 const PAGE_TAB_KEY = 'claude-console:page'
 
 const readPageTab = (): PageTab => {
   try {
-    return localStorage.getItem(PAGE_TAB_KEY) === 'knowledge' ? 'knowledge' : 'dashboard'
+    const stored = localStorage.getItem(PAGE_TAB_KEY)
+
+    return stored === 'knowledge' || stored === 'settings' ? stored : 'dashboard'
   } catch {
     return 'dashboard'
   }
@@ -4211,6 +4625,7 @@ const readPageTab = (): PageTab => {
 const PAGE_TABS: Array<{ id: PageTab; label: string }> = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'knowledge', label: 'Claude Knowledge' },
+  { id: 'settings', label: 'Configurations' },
 ]
 
 const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) => void }) => (
@@ -4405,6 +4820,10 @@ export const App = () => {
               </div>
             </div>
           </>
+        ) : page === 'settings' ? (
+          <div className="settings-page">
+            <PetSettingsCard />
+          </div>
         ) : (
           <div className="knowledge">
             <div className="grid knowledge-wide">

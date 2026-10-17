@@ -155,6 +155,29 @@ export type DiskUsage = {
   disk: { size: number; used: number; free: number } | null
 }
 
+// The pet walking in the window bar: its sprites, as paths under /api/pet/.
+export type Pet = {
+  kind: string
+  color: string
+  credit: string
+  walk: string
+  idle: string
+  // Empty when the pet has no sprite for it.
+  lie: string
+  run: string
+  withBall: string
+  // The sprite's width in pixels.
+  size: number
+}
+
+// How the window bar's pet is set: on or off, and a pet and color, each fixed
+// or, when empty, drawn at random.
+// size is the sprite's width in pixels.
+export type PetSettings = { isEnabled: boolean; kind: string; color: string; size: number }
+
+// The pets that can be chosen, with the colors each comes in.
+export type PetOptions = Record<string, string[]>
+
 export type Battery = { percent: number; isCharging: boolean; isPluggedIn: boolean }
 
 export type ConsoleFeatures = {

@@ -96,7 +96,7 @@ claude -p "/daily-briefing" --model haiku --tools "" --no-session-persistence --
 
 ## What It Shows
 
-The console has two pages, **Dashboard** and **Claude Knowledge** (how your Claude Code is set up: memory, instructions, hooks, skills, MCP servers, extensions, and published artifacts); it remembers the one you left open.
+The console has three pages, **Dashboard**, **Claude Knowledge**, and **Configurations**, (how your Claude Code is set up: memory, instructions, hooks, skills, MCP servers, extensions, and published artifacts); it remembers the one you left open.
 
 - **Activity.** A contribution heatmap that combines GitHub contributions with Claude tool calls.
 - **Briefing.** A greeting with your GitHub photo and bio, then what you did on your last working day, every pull request you opened, merged, or closed since yesterday, and the tickets in progress. With `briefing` configured, Claude writes it as a short summary (a headline, a few sentences, and what comes next) with pull requests and tickets linked, and the lists move behind **Show details**. See [Written Briefing](#written-briefing).
@@ -115,7 +115,7 @@ The console has two pages, **Dashboard** and **Claude Knowledge** (how your Clau
   - **MCP servers:** every server Claude Code would load from the repository, with the health `claude mcp list` reports (connected, needs authentication, failed, and why). It connects to each server, so it runs every ten minutes, or on **Check again**.
   - **Extensions:** marketplace and local plugins, slash commands, and subagents.
 - **Skills.** On **Claude Knowledge**: your skills in `~/.claude/skills` (**Mine**) and the ones the watched repository ships in `.claude/skills` (**Project**), each with its command, arguments, description, and how often you used it in the last 40 days (by typing it or by Claude calling it); sort by name or by use. Clicking a command copies it.
-- **Window bar.** The console's name, what the worktrees take on disk (measured in the background every half hour at the lowest priority, with the largest ones and the disk's free space in its tooltip, red when the disk is almost full), the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
+- **Window bar.** Optionally, a pet from [vscode-pets](https://github.com/tonybaloney/vscode-pets), any of the 26 its package ships. It is off until you turn it on in **Configurations**, where you also pick the pet and its color (or leave either to be drawn at random each time the console starts) and its width in pixels, 16 to 80 (30, the vscode-pets default, unless changed). It goes strolling the empty stretch of the bar. Click empty spots of the bar to throw it balls, up to five at a time: each bounces to the floor, and the pet fetches them one by one, nearest first, playing with each. It stands still when your system asks for reduced motion; hover it for the artist's credit. Then the console's name, what the worktrees take on disk (measured in the background every half hour at the lowest priority, with the largest ones and the disk's free space in its tooltip, red when the disk is almost full), the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
 - **Worktrees.** The five most recently touched, with **Show more** for the rest, grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console, after asking; `git worktree remove` runs without force first, so uncommitted work is never lost by accident. When git refuses because of modified or untracked files, **Force delete** removes it anyway, after a warning that those files are lost; the branch and its commits stay.
 
 ## What It Stores
@@ -128,6 +128,8 @@ Everything the console keeps stays on this machine, outside the repository:
 | `~/.config/claude-console/env` (mode 600) | The Jira credentials, when Jira is on. |
 | `~/.config/claude-console/favorites.json` (mode 600) | The starred sessions: each one's id, name, branch, and folders, enough to list and resume it later. |
 | `~/.config/claude-console/names.json` (mode 600) | The names you gave sessions in the console, by session id. |
+| `~/.config/claude-console/settings.json` (mode 600) | The choices made in **Configurations**, such as the pet. |
+| `~/.config/claude-console/pets/` (mode 600) | The pets' sprites (about 3 MB), taken once from the vscode-pets package on the Visual Studio Marketplace (the package is deleted right after; it needs `unzip`). They are not part of this repository: the art belongs to the artists vscode-pets credits. |
 | `~/.config/claude-console/disk.json` (mode 600) | The last measure of the worktrees' sizes, so a restart shows it without measuring again. |
 | `~/.config/claude-console/briefing/` (mode 600) | The written briefings of the last 14 days, one file per day. |
 | The page's browser storage | View preferences: the theme, the selected sessions tab, the Jira view, and the activity tab. |
