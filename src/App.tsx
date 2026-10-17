@@ -54,6 +54,7 @@ import {
   type BriefPr,
   type PrEvent,
 } from './format'
+import { BALL, type Ball, hitBall, newBall, stepBall } from './ballPhysics'
 import { EmojiLoader } from './EmojiLoader'
 import { MemoryGraph } from './MemoryGraph'
 
@@ -193,9 +194,6 @@ const WorktreeDisk = ({ usage }: { usage: DiskUsage }) => {
 const PET_SPEED = 26
 const PET_RUN_SPEED = 110
 const PET_MARGIN = 20
-const BALL_SIZE = 9
-const GRAVITY = 1400
-const BOUNCE = 0.55
 const BALL_EVENT = 'claude-console:throw-ball'
 const MAX_BALLS = 5
 
@@ -241,7 +239,7 @@ const WalkingPet = ({
 
       lane.left = title.current.getBoundingClientRect().right - box.left + PET_MARGIN
       lane.right = status.current.getBoundingClientRect().left - box.left - PET_MARGIN - width
-      lane.floor = box.height - BALL_SIZE - 3
+      lane.floor = box.height - BALL.size - 3
     }
     const observer = new ResizeObserver(measure)
 
@@ -258,8 +256,7 @@ const WalkingPet = ({
     let until = performance.now() + 1500
     let last = performance.now()
     let frame = 0
-    // The balls in play: where each is, how fast it falls, whether it rests.
-    type Ball = { x: number; y: number; vy: number; isResting: boolean }
+    // The balls in play, moved in place each frame.
     const balls: Ball[] = []
     let chasing: Ball | null = null
 
@@ -278,7 +275,7 @@ const WalkingPet = ({
 
         dot.style.display = ball ? 'block' : 'none'
 
-        if (ball) dot.style.transform = `translate(${Math.round(ball.x - BALL_SIZE / 2)}px, ${Math.round(ball.y)}px)`
+        if (ball) dot.style.transform = `translate(${Math.round(ball.x - BALL.size / 2)}px, ${Math.round(ball.y)}px)`
       })
     }
 
@@ -310,7 +307,7 @@ const WalkingPet = ({
       const width = spriteWidth()
       const ballX = Math.min(Math.max(at, lane.left + width / 2), lane.right + width / 2)
 
-      balls.push({ x: ballX, y: Math.min(Math.max(0, y - BALL_SIZE / 2), lane.floor), vy: 0, isResting: false })
+      balls.push(newBall(ballX, Math.min(Math.max(0, y - BALL.size / 2), lane.floor)))
 
       // Already fetching or playing, it gets to this one afterward.
       if (mode !== 'run' && mode !== 'play') chaseNext()
@@ -318,7 +315,51 @@ const WalkingPet = ({
       place()
     }
 
+    // Where the balls' centers may go: the empty stretch of the bar.
+    const ballBounds = () => ({
+      left: lane.left + BALL.size / 2,
+      right: lane.right + spriteWidth() - BALL.size / 2,
+      floor: lane.floor,
+    })
+
+    // The pointer moving over the bar hits the balls it passes, at its speed.
+    let lastPointer: { x: number; y: number; at: number } | null = null
+
+    const onPointerMove = (event: PointerEvent) => {
+      const box = bar.current?.getBoundingClientRect()
+
+      if (!box || balls.length === 0) return
+
+      const point = { x: event.clientX - box.left, y: event.clientY - box.top, at: performance.now() }
+      const elapsed = lastPointer ? Math.max(0.008, (point.at - lastPointer.at) / 1000) : 0
+      const velocity = lastPointer && elapsed < 0.2
+        ? { x: (point.x - lastPointer.x) / elapsed, y: (point.y - lastPointer.y) / elapsed }
+        : { x: 0, y: 0 }
+
+      lastPointer = point
+
+      let wasHit = false
+
+      for (const ball of balls) {
+        const next = hitBall(ball, point, velocity, point.at)
+
+        if (next !== ball) {
+          Object.assign(ball, next)
+          wasHit = true
+        }
+      }
+
+      if (wasHit && (mode === 'walk' || mode === 'idle' || mode === 'lie')) chaseNext()
+    }
+    const onPointerLeave = () => {
+      lastPointer = null
+    }
+
     window.addEventListener(BALL_EVENT, onThrow)
+    bar.current?.addEventListener('pointermove', onPointerMove)
+    bar.current?.addEventListener('pointerleave', onPointerLeave)
+
+    const barNode = bar.current
 
     if (prefersReducedMotion()) {
       place()
@@ -326,6 +367,8 @@ const WalkingPet = ({
       return () => {
         observer.disconnect()
         window.removeEventListener(BALL_EVENT, onThrow)
+        barNode?.removeEventListener('pointermove', onPointerMove)
+        barNode?.removeEventListener('pointerleave', onPointerLeave)
       }
     }
 
@@ -335,28 +378,24 @@ const WalkingPet = ({
       last = now
       x = Math.min(Math.max(x, lane.left), Math.max(lane.left, lane.right))
 
-      for (const ball of balls) {
-        if (ball.isResting) continue
+      const bounds = ballBounds()
 
-        ball.vy += GRAVITY * dt
-        ball.y += ball.vy * dt
+      for (const ball of balls) Object.assign(ball, stepBall(ball, bounds, dt))
 
-        if (ball.y >= lane.floor) {
-          ball.y = lane.floor
-          ball.vy = -ball.vy * BOUNCE
+      // A rolling ball moves the goal; the pet turns to follow it.
+      if (mode === 'run' && chasing) {
+        target = chasing.x - spriteWidth() / 2
 
-          if (Math.abs(ball.vy) < 60) {
-            ball.vy = 0
-            ball.isResting = true
-          }
-        }
+        if (Math.abs(target - x) > 2) facing = target >= x ? 1 : -1
       }
 
       if (mode === 'walk' || mode === 'run') {
         const step = (mode === 'run' ? PET_RUN_SPEED : PET_SPEED) * dt
         const gap = target - x
+        // It catches a ball only near the floor, not one flying overhead.
+        const isCatchable = mode !== 'run' || !chasing || chasing.y >= lane.floor - 8
 
-        if (Math.abs(gap) <= step) {
+        if (Math.abs(gap) <= step + (mode === 'run' ? 2 : 0) && isCatchable) {
           x = target
 
           if (mode === 'run') {
@@ -373,7 +412,8 @@ const WalkingPet = ({
             until = now + (lies ? 5000 + Math.random() * 6000 : 1500 + Math.random() * 3500)
           }
         } else {
-          x += Math.sign(gap) * step
+          // Under a ball still in the air, it waits instead of overshooting.
+          x = Math.abs(gap) <= step ? target : x + Math.sign(gap) * step
         }
       } else if (now >= until && !chaseNext()) {
         target = lane.left + Math.max(0, lane.right - lane.left) * Math.random()
@@ -391,6 +431,8 @@ const WalkingPet = ({
       cancelAnimationFrame(frame)
       observer.disconnect()
       window.removeEventListener(BALL_EVENT, onThrow)
+      barNode?.removeEventListener('pointermove', onPointerMove)
+      barNode?.removeEventListener('pointerleave', onPointerLeave)
     }
   }, [pet, bar, title, status])
 
