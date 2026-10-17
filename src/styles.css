@@ -522,6 +522,39 @@ button:disabled {
   color: var(--ink-2);
 }
 
+/* Loading screen */
+
+.emoji-loader {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1.5rem;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.emoji-stage {
+  position: relative;
+  max-width: 100%;
+  touch-action: none;
+}
+
+.emoji-orbiter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-size: 2rem;
+  line-height: 1;
+  user-select: none;
+  will-change: transform;
+}
+
+.emoji-loader-message {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+
 /* Theme switch */
 
 .segmented {

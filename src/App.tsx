@@ -51,6 +51,7 @@ import {
   type BriefPr,
   type PrEvent,
 } from './format'
+import { EmojiLoader } from './EmojiLoader'
 import { MemoryGraph } from './MemoryGraph'
 
 const POLL_MS = 10_000
@@ -4281,6 +4282,8 @@ const usePageTab = () => {
   return [tab, choose] as const
 }
 
+const isLoadingPreview = new URLSearchParams(window.location.search).has('loading')
+
 export const App = () => {
   const { snapshot, error, isRefreshing, isFetching, refresh } = useSnapshot()
   const now = useNow()
@@ -4304,12 +4307,9 @@ export const App = () => {
     if (title) document.title = title
   }, [title])
 
-  if (!snapshot) {
-    return (
-      <main className="shell loading">
-        <p>{error ? `Unable to load the console: ${error}` : 'Reading worktrees, pull requests and sessions…'}</p>
-      </main>
-    )
+  // ?loading keeps the loading screen up, to look at it.
+  if (!snapshot || isLoadingPreview) {
+    return <EmojiLoader message={error ? `Unable to load the console: ${error}` : 'Reading worktrees, pull requests and sessions…'} />
   }
 
   const problems = [
