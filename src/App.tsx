@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type {
+  DiskUsage,
+  ClaudeKnowledge,
+  Extension,
+  Instruction,
+  McpServer,
   Skill,
   Battery,
   Activity,
@@ -9,7 +14,6 @@ import type {
   Contributions,
   JiraIssue,
   MemoryNote,
-  Profile,
   PublishedArtifact,
   LiveResponse,
   LiveStatus,
@@ -41,6 +45,7 @@ import {
   verbFor,
   worktreeOf,
   briefingPrs,
+  bytesLabel,
   summaryParagraphs,
   type SummaryToken,
   type BriefPr,
@@ -65,8 +70,8 @@ const readTheme = (): Theme => {
 
 const SYSTEM_POLL_MS = 30_000
 
-const useBattery = () => {
-  const [battery, setBattery] = useState<Battery | null>(null)
+const useSystem = () => {
+  const [system, setSystem] = useState<{ battery: Battery | null; disk: DiskUsage | null }>({ battery: null, disk: null })
 
   useEffect(() => {
     let isActive = true
@@ -75,7 +80,7 @@ const useBattery = () => {
       try {
         const response = await fetch('/api/system')
 
-        if (response.ok && isActive) setBattery(((await response.json()) as { battery: Battery | null }).battery)
+        if (response.ok && isActive) setSystem((await response.json()) as { battery: Battery | null; disk: DiskUsage | null })
       } catch {
         // Keep the last reading until the server answers again.
       }
@@ -90,7 +95,7 @@ const useBattery = () => {
     }
   }, [])
 
-  return battery
+  return system
 }
 
 // The wall clock, ticking over exactly on each new minute.
@@ -122,7 +127,7 @@ const BatteryMeter = ({ battery }: { battery: Battery }) => {
   const state = battery.isCharging ? 'charging' : battery.isPluggedIn ? 'plugged in' : 'on battery'
 
   return (
-    <span className="win-battery" data-level={batteryLevel(battery)} title={`Battery ${battery.percent}%, ${state}`}>
+    <span className="win-battery" data-level={batteryLevel(battery)} data-tooltip={`Battery ${battery.percent}%, ${state}`}>
       <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
         <rect x="0.5" y="0.5" width="20" height="11" rx="2.5" fill="none" stroke="currentColor" opacity="0.55" />
         <rect x="21.5" y="3.5" width="2" height="5" rx="1" fill="currentColor" opacity="0.55" />
@@ -133,6 +138,41 @@ const BatteryMeter = ({ battery }: { battery: Battery }) => {
       </svg>
       <span>{battery.percent}%</span>
       <span className="visually-hidden">, {state}</span>
+    </span>
+  )
+}
+
+const worktreeName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
+
+// What the worktrees take on disk, with the largest ones and the disk's free
+// space in its tooltip. It turns red when the disk is almost full.
+const WorktreeDisk = ({ usage }: { usage: DiskUsage }) => {
+  const freeShare = usage.disk ? usage.disk.free / usage.disk.size : 1
+  const level = freeShare < 0.1 ? 'critical' : freeShare < 0.2 ? 'low' : 'ok'
+  const largest = usage.worktrees
+    .slice(0, 5)
+    .map(w => `  ${worktreeName(w.path)}: ${bytesLabel(w.bytes)}`)
+    .join('\n')
+  const tooltip = [
+    usage.scannedAt
+      ? `${usage.worktrees.length} worktrees take ${bytesLabel(usage.totalBytes)}${usage.isScanning ? ' (measuring again…)' : ''}`
+      : 'Measuring the worktrees…',
+    largest && `Largest:\n${largest}`,
+    usage.disk &&
+      `Disk: ${Math.round((usage.disk.used / usage.disk.size) * 100)}% used, ${bytesLabel(usage.disk.free)} free of ${bytesLabel(usage.disk.size)}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  return (
+    <span className="win-disk" data-level={level} data-tooltip={tooltip} tabIndex={0}>
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+        <rect x="1.5" y="3" width="13" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M1.5 9.5h13" stroke="currentColor" strokeWidth="1.3" />
+        <circle cx="11.6" cy="11.3" r="0.8" fill="currentColor" />
+      </svg>
+      <span>{usage.scannedAt ? bytesLabel(usage.totalBytes) : 'Measuring…'}</span>
+      <span className="visually-hidden"> in worktrees</span>
     </span>
   )
 }
@@ -195,7 +235,7 @@ const toggleMaximized = async () => {
 // A title bar in the manner of a desktop window: the console's name on the left,
 // the battery, the time, and maximize and close buttons on the right.
 const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
-  const battery = useBattery()
+  const { battery, disk } = useSystem()
   const now = useClock()
   const isMaximized = useIsMaximized()
   const [windowError, setWindowError] = useState('')
@@ -213,8 +253,9 @@ const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
             {windowError}
           </span>
         )}
+        {disk && (disk.scannedAt > 0 || disk.isScanning) && <WorktreeDisk usage={disk} />}
         {battery && <BatteryMeter battery={battery} />}
-        <time className="win-clock" dateTime={date.toISOString()} title={date.toLocaleString()}>
+        <time className="win-clock" dateTime={date.toISOString()} data-tooltip={date.toLocaleString()}>
           <span className="win-date">{date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} </span>
           <strong>{date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong>
         </time>
@@ -222,7 +263,7 @@ const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
           type="button"
           className="win-button"
           aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
-          title={isMaximized ? 'Restore window' : 'Maximize window'}
+          data-tooltip={isMaximized ? 'Restore window' : 'Maximize window'}
           onClick={() => {
             setWindowError('')
             toggleMaximized().catch((error: unknown) =>
@@ -245,7 +286,7 @@ const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
           type="button"
           className="win-button win-close"
           aria-label="Close window"
-          title="Close window"
+          data-tooltip="Close window"
           onClick={() => {
             setWindowError('')
             closeWindow().catch((error: unknown) =>
@@ -457,7 +498,7 @@ const ActivityStrip = ({ days }: { days: number[] }) => {
             key={i}
             className="strip-day"
             data-level={level}
-            title={`${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${count}`}
+            data-tooltip={`${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${count}`}
           />
         )
       })}
@@ -509,7 +550,7 @@ const ghosttyAction = (label: string, dir: string, session?: string): MenuAction
 
 // Starts a new Claude Code session in a new Ghostty tab: an empty one in a
 // worktree, or the configured one in the repository.
-const startSession = async (body: { dir?: string; input?: string }): Promise<true | string> => {
+const startSession = async (body: { dir?: string; input?: string; env?: string }): Promise<true | string> => {
   const response = await fetch('/api/session/new', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
@@ -677,6 +718,7 @@ const ConfirmHost = () => {
 }
 
 const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
+const PR_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/
 
 // The "+" beside the session search. It opens a modal that says what will be
 // created, asks for a ticket or a name when the configured first message needs
@@ -700,9 +742,14 @@ const NewSessionButton = ({
   const [error, setError] = useState('')
   const [isStarting, setIsStarting] = useState(false)
   const [note, setNote] = useState('')
+  const [env, setEnv] = useState('')
   const value = input.trim()
-  const isValid = !setup.needsInput || INPUT_PATTERN.test(value)
-  const prompt = setup.prompt.replaceAll('{input}', value || `<${setup.inputLabel.toLowerCase()}>`)
+  const isValid = !setup.needsInput || INPUT_PATTERN.test(value) || PR_URL_PATTERN.test(value)
+  const prompt = setup.prompt
+    .replaceAll('{input}', value || `<${setup.inputLabel.toLowerCase()}>`)
+    .replaceAll('{env}', env)
+    .replace(/\s+/g, ' ')
+    .trim()
 
   useEffect(() => {
     if (!note) return
@@ -715,6 +762,7 @@ const NewSessionButton = ({
   const close = () => {
     setIsOpen(false)
     setInput(initialInput)
+    setEnv('')
     setError('')
   }
 
@@ -723,7 +771,7 @@ const NewSessionButton = ({
 
     setIsStarting(true)
 
-    const outcome = await startSession(setup.needsInput ? { input: value } : {})
+    const outcome = await startSession({ ...(setup.needsInput ? { input: value } : {}), ...(env ? { env } : {}) })
 
     setIsStarting(false)
 
@@ -746,7 +794,7 @@ const NewSessionButton = ({
         type="button"
         className="icon-button"
         aria-label={label}
-        title={label}
+        data-tooltip={label}
         aria-haspopup="dialog"
         onClick={() => {
           setInput(initialInput)
@@ -797,9 +845,33 @@ const NewSessionButton = ({
                   autoComplete="off"
                 />
                 <span id="new-session-hint" className="modal-hint">
-                  Letters, numbers, <code>.</code> <code>-</code> <code>_</code>, such as <code>LPD-12345</code>.
+                  A ticket or a name (letters, numbers, <code>.</code> <code>-</code> <code>_</code>), such as{' '}
+                  <code>LPD-12345</code>, or a GitHub pull request link.
                 </span>
               </label>
+            )}
+            {setup.environments.length > 0 && (
+              <fieldset className="modal-field modal-choice">
+                <legend>Frontend dev server</legend>
+                <div className="segmented" role="radiogroup" aria-label="Frontend dev server">
+                  {[{ label: 'None', value: '' }, ...setup.environments].map(option => (
+                    <button
+                      key={option.value || 'none'}
+                      type="button"
+                      role="radio"
+                      aria-checked={env === option.value}
+                      onClick={() => setEnv(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="modal-hint">
+                  {env
+                    ? `Starts the dev server against ${setup.environments.find(e => e.value === env)?.label}.`
+                    : 'No dev server: the session starts without one.'}
+                </span>
+              </fieldset>
             )}
             <dl className="modal-preview">
               <dt>Folder</dt>
@@ -909,7 +981,7 @@ const ActionMenu = ({ label, actions }: { label: string; actions: MenuAction[] }
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-label={label}
-        title={label}
+        data-tooltip={label}
         onClick={() => setIsOpen(v => !v)}
         onKeyDown={event => {
           if (event.key === 'ArrowDown' && !isOpen) {
@@ -1136,7 +1208,7 @@ const SessionTitle = ({ session }: { session: Session }) => {
       data-auto={!given && session.isAutoTitle}
       data-empty={isEmpty}
       data-given={!!given || undefined}
-      title={
+      data-tooltip={
         given
           ? `Named in the console${claudeName ? `; Claude Code calls it "${claudeName}"` : ''}. Click to rename.`
           : session.isAutoTitle
@@ -1255,6 +1327,31 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   return actions
 }
 
+// Deletes a worktree, marking its row while git works. On success the row stays
+// marked until the next snapshot drops it.
+const removeWorktree = async (path: string, force: boolean) => {
+  setDeleting(path, true)
+
+  const response = await fetch('/api/worktree/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ path, force }),
+  }).catch(() => null)
+
+  if (response?.ok) {
+    window.dispatchEvent(new Event('claude-console:refresh'))
+    setTimeout(() => setDeleting(path, false), 30_000)
+
+    return { ok: true, error: '', canForce: false }
+  }
+
+  setDeleting(path, false)
+
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { error?: string; canForce?: boolean }
+
+  return { ok: false, error: body.error ?? 'The console did not answer.', canForce: !!body.canForce }
+}
+
 // The worktrees being deleted right now, shared by the menu action that starts
 // a deletion and the rows that show it.
 const deletingWorktrees = new Set<string>()
@@ -1338,29 +1435,38 @@ const worktreeActions = (worktree: Worktree): MenuAction[] => {
 
         if (!isSure) return ''
 
-        setDeleting(worktree.path, true)
+        let outcome = await removeWorktree(worktree.path, false)
 
-        const response = await fetch('/api/worktree/remove', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
-          body: JSON.stringify({ path: worktree.path }),
-        }).catch(() => null)
+        if (!outcome.ok && outcome.canForce) {
+          const isForced = await askConfirm({
+            title: 'The worktree was not deleted',
+            body: (
+              <>
+                <p className="modal-text">{outcome.error}</p>
+                <p className="modal-text">
+                  <strong>Force delete</strong> removes the folder anyway, and its uncommitted changes and untracked files
+                  are lost for good.
+                  {worktree.branch && (
+                    <>
+                      {' '}
+                      The branch <code>{worktree.branch}</code> and its commits stay.
+                    </>
+                  )}
+                </p>
+              </>
+            ),
+            confirmLabel: 'Force delete',
+            isDanger: true,
+          })
 
-        if (response?.ok) {
-          // The row leaves with the next snapshot; until then it stays marked.
-          window.dispatchEvent(new Event('claude-console:refresh'))
-          setTimeout(() => setDeleting(worktree.path, false), 30_000)
+          if (!isForced) return 'Not deleted'
 
-          return 'Deleted'
+          outcome = await removeWorktree(worktree.path, true)
         }
 
-        setDeleting(worktree.path, false)
+        if (outcome.ok) return 'Deleted'
 
-        const { error } = ((await response?.json().catch(() => null)) ?? { error: 'The console did not answer.' }) as {
-          error?: string
-        }
-
-        await showNotice('The worktree was not deleted', <p className="modal-text">{error ?? 'Unknown error'}</p>)
+        await showNotice('The worktree was not deleted', <p className="modal-text">{outcome.error}</p>)
 
         return 'Not deleted'
       },
@@ -1381,7 +1487,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         <a
           className="wt-name"
           href={`ghosttycd://${worktree.path}`}
-          title={`Open ${worktree.path} in Ghostty`}
+          data-tooltip={`Open ${worktree.path} in Ghostty`}
           tabIndex={isDeleting ? -1 : undefined}
         >
           {worktree.name}
@@ -1390,7 +1496,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         <span className="wt-subject">{worktree.subject}</span>
       </span>
       <ActivityStrip days={worktree.activityDays} />
-      <span className="wt-touched" title={new Date(worktree.lastTouchedAt).toLocaleString()}>
+      <span className="wt-touched" data-tooltip={new Date(worktree.lastTouchedAt).toLocaleString()}>
         {ago(worktree.lastTouchedAt, now)}
       </span>
       {isDeleting ? (
@@ -1411,7 +1517,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
             </span>
           )}
           {live.length > 0 && (
-            <span className="tag tag-session" title={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
+            <span className="tag tag-session" data-tooltip={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
               {live.length === 1 ? 'Claude' : `Claude ×${live.length}`}
             </span>
           )}
@@ -1432,9 +1538,12 @@ const FILTERS: Array<{ id: Activity; label: string; hint: string }> = [
   { id: 'dormant', label: 'Dormant', hint: 'untouched for more than 14 days: prune candidates' },
 ]
 
+const WORKTREE_PAGE = 5
+
 const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) => {
   const [filter, setFilter] = useState<Activity | 'all'>('active')
   const [query, setQuery] = useState('')
+  const [showAll, setShowAll] = useState(false)
   const counts = useMemo(
     () => Object.fromEntries(FILTERS.map(f => [f.id, worktrees.filter(w => w.activity === f.id).length])),
     [worktrees],
@@ -1443,6 +1552,13 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
     .filter(w => filter === 'all' || w.activity === filter)
     .filter(w => !query || `${w.name} ${w.branch} ${w.subject}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)
+  // The five most recently touched, unless searching or asked for all.
+  const visible = showAll || query ? shown : shown.slice(0, WORKTREE_PAGE)
+
+  const choose = (next: Activity | 'all') => {
+    setFilter(next)
+    setShowAll(false)
+  }
 
   return (
     <section className="panel worktrees" aria-labelledby="worktrees-title">
@@ -1456,13 +1572,13 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
               role="tab"
               aria-selected={filter === f.id}
               data-activity={f.id}
-              title={f.hint}
-              onClick={() => setFilter(f.id)}
+              data-tooltip={f.hint}
+              onClick={() => choose(f.id)}
             >
               {f.label} <span className="count">{counts[f.id]}</span>
             </button>
           ))}
-          <button type="button" role="tab" aria-selected={filter === 'all'} onClick={() => setFilter('all')}>
+          <button type="button" role="tab" aria-selected={filter === 'all'} onClick={() => choose('all')}>
             All <span className="count">{worktrees.length}</span>
           </button>
         </div>
@@ -1480,11 +1596,18 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
           {query ? 'No worktree matches that filter.' : 'Nothing here. Switch the filter to see the rest.'}
         </p>
       ) : (
-        <ul className="wt-list">
-          {shown.map(w => (
-            <WorktreeRow key={w.path} worktree={w} now={now} />
-          ))}
-        </ul>
+        <>
+          <ul className="wt-list">
+            {visible.map(w => (
+              <WorktreeRow key={w.path} worktree={w} now={now} />
+            ))}
+          </ul>
+          {!query && shown.length > WORKTREE_PAGE && (
+            <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+              {showAll ? 'Show only the 5 most recent' : `Show ${shown.length - WORKTREE_PAGE} more`}
+            </button>
+          )}
+        </>
       )}
       {filter === 'dormant' && shown.length > 0 && (
         <p className="note">
@@ -1529,7 +1652,7 @@ const SessionLabels = ({ linked: unsorted }: { linked: Session[] }) => {
           type="button"
           className="tag tag-session session-link"
           data-status={session.isRunning ? session.runStatus : 'ended'}
-          title={`Show the session ${session.name || session.id}`}
+          data-tooltip={`Show the session ${session.name || session.id}`}
           onClick={() => window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail: session.id }))}
         >
           Claude: {session.name || 'Untitled session'}
@@ -1546,11 +1669,39 @@ const PrSessions = ({ pr, sessions }: { pr: PullRequest; sessions: Session[] }) 
   <SessionLabels linked={sessions.filter(session => prBelongsTo(pr, session))} />
 )
 
-const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: Session[] }) => {
+// Whether a pull request belongs to the watched repository or one of its forks,
+// judged by the repository's name: only then can a worktree check out its branch.
+const isSameProject = (prRepo: string, repoPath: string) =>
+  prRepo.split('/')[1]?.toLowerCase() === repoPath.split('/').filter(Boolean).pop()?.toLowerCase()
+
+const PrRow = ({
+  pr,
+  now,
+  sessions,
+  setup,
+  repo,
+  showAuthor = false,
+}: {
+  pr: PullRequest
+  now: number
+  sessions: Session[]
+  setup: Snapshot['features']['newSession']
+  repo: string
+  showAuthor?: boolean
+}) => {
   const failing = pr.checks.filter(c => c.state === 'failure')
 
   return (
     <li className="pr" data-ci={pr.ci}>
+      {setup.needsInput && !pr.worktreePath && isSameProject(pr.repo, repo) && (
+        <NewSessionButton
+          setup={setup}
+          repo={repo}
+          initialInput={pr.url}
+          label={`Set up a worktree for ${pr.repo}#${pr.number}`}
+          isSmall
+        />
+      )}
       {pr.ci !== 'none' && <span className="pr-ci">{CI_LABEL[pr.ci]}</span>}
       <a className="pr-title" href={pr.url}>
         {pr.title}
@@ -1559,6 +1710,7 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
         <span>
           {pr.repo}#{pr.number}
         </span>
+        {showAuthor && pr.author && <span className="pr-author">by {pr.author}</span>}
         {pr.isDraft && <span className="tag">Draft</span>}
         {REVIEW_LABEL[pr.reviewDecision] && (
           <span className="tag" data-review={pr.reviewDecision}>
@@ -1573,7 +1725,7 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
       <code className="pr-branch">
         {pr.branch}
         {pr.worktreePath && (
-          <a className="pr-wt" href={`ghosttycd://${pr.worktreePath}`} title={pr.worktreePath}>
+          <a className="pr-wt" href={`ghosttycd://${pr.worktreePath}`} data-tooltip={pr.worktreePath}>
             has a worktree
           </a>
         )}
@@ -1594,9 +1746,27 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
   )
 }
 
-const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number; sessions: Session[] }) => {
+type PrTab = 'mine' | 'assigned'
+
+const PullRequests = ({
+  prs,
+  assigned,
+  now,
+  sessions,
+  setup,
+  repo,
+}: {
+  prs: PullRequest[]
+  assigned: PullRequest[]
+  now: number
+  sessions: Session[]
+  setup: Snapshot['features']['newSession']
+  repo: string
+}) => {
+  const [tab, setTab] = useState<PrTab>('mine')
   const [showStale, setShowStale] = useState(false)
-  const all = [...prs].sort(
+  const list = tab === 'mine' ? prs : assigned
+  const all = [...list].sort(
     (a, b) =>
       ['failing', 'running', 'passing', 'none'].indexOf(a.ci) - ['failing', 'running', 'passing', 'none'].indexOf(b.ci) ||
       b.updatedAt - a.updatedAt,
@@ -1604,22 +1774,41 @@ const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number;
 
   const ordered = all.filter(pr => now - pr.updatedAt < STALE_MS)
   const stale = all.filter(pr => now - pr.updatedAt >= STALE_MS)
+  const row = (pr: PullRequest) => (
+    <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} setup={setup} repo={repo} showAuthor={tab === 'assigned'} />
+  )
 
   return (
     <section className="panel prs" aria-labelledby="prs-title">
       <header className="panel-head">
         <h2 id="prs-title">Open pull requests</h2>
+        <div className="filters" role="tablist" aria-label="Pull requests">
+          {(['mine', 'assigned'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              data-tooltip={option === 'assigned' ? 'Assigned to you, or asking for your review' : 'Opened by you'}
+              onClick={() => {
+                setTab(option)
+                setShowStale(false)
+              }}
+            >
+              {option === 'mine' ? 'Mine' : 'Assigned to me'}
+              <span className="count"> {(option === 'mine' ? prs : assigned).length}</span>
+            </button>
+          ))}
+        </div>
       </header>
-      {prs.length === 0 ? (
-        <p className="empty">You have no open pull requests.</p>
+      {list.length === 0 ? (
+        <p className="empty">
+          {tab === 'mine' ? 'You have no open pull requests.' : 'No open pull request is assigned to you or asks for your review.'}
+        </p>
       ) : ordered.length === 0 ? (
         <p className="empty">Nothing moved in the last 30 days.</p>
       ) : (
-        <ul className="pr-list">
-          {ordered.map(pr => (
-            <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} />
-          ))}
-        </ul>
+        <ul className="pr-list">{ordered.map(row)}</ul>
       )}
       {stale.length > 0 && (
         <>
@@ -1628,13 +1817,7 @@ const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number;
               ? 'Hide stale pull requests'
               : `Show ${stale.length} stale pull request${stale.length === 1 ? '' : 's'}, untouched for 30+ days`}
           </button>
-          {showStale && (
-            <ul className="pr-list stale">
-              {stale.map(pr => (
-                <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} />
-              ))}
-            </ul>
-          )}
+          {showStale && <ul className="pr-list stale">{stale.map(row)}</ul>}
         </>
       )}
     </section>
@@ -1798,7 +1981,7 @@ const SessionCost = ({ cost }: { cost: number | null }) => {
   if (cost === null) return null
 
   return (
-    <span ref={ref} key={pop} className="session-cost" data-pop={pop > 0} title="What this session has cost so far, at API prices">
+    <span ref={ref} key={pop} className="session-cost" data-pop={pop > 0} data-tooltip="What this session has cost so far, at API prices">
       ${cost.toFixed(2)}
     </span>
   )
@@ -1843,7 +2026,7 @@ const RecapButton = ({ recap, recapAt, now }: { recap: string; recapAt: number; 
         aria-expanded={isOpen}
         aria-controls={id}
         aria-label="Show the recap of this session"
-        title="Recap"
+        data-tooltip="Recap"
         onClick={() => setIsOpen(v => !v)}
       >
         ?
@@ -1852,7 +2035,7 @@ const RecapButton = ({ recap, recapAt, now }: { recap: string; recapAt: number; 
         <span className="recap-popover" id={id} role="dialog" aria-label="Session recap">
           <span className="recap-text">{recap}</span>
           {recapAt > 0 && (
-            <span className="recap-age" title={new Date(recapAt).toLocaleString()}>
+            <span className="recap-age" data-tooltip={new Date(recapAt).toLocaleString()}>
               Recap from {ago(recapAt, now)}
             </span>
           )}
@@ -1879,12 +2062,12 @@ const SessionPrs = ({ session, prs, queue }: { session: Session; prs: PullReques
   return (
     <span className="session-prs">
       {related.map(pr => (
-        <a key={pr.url} className="tag" data-ci={pr.ci} href={pr.url} title={`${pr.repo}#${pr.number}: ${pr.title} (${CI_LABEL[pr.ci]})`}>
+        <a key={pr.url} className="tag" data-ci={pr.ci} href={pr.url} data-tooltip={`${pr.repo}#${pr.number}: ${pr.title} (${CI_LABEL[pr.ci]})`}>
           PR #{pr.number}
         </a>
       ))}
       {waiting.map(pr => (
-        <a key={pr.url} className="tag" data-ci="passing" href={pr.url} title={`Waiting in ${queue!.name}'s queue: ${pr.title}`}>
+        <a key={pr.url} className="tag" data-ci="passing" href={pr.url} data-tooltip={`Waiting in ${queue!.name}'s queue: ${pr.title}`}>
           {queue!.name} #{pr.number}
         </a>
       ))}
@@ -1900,7 +2083,7 @@ const SessionArtifacts = ({ session, artifacts }: { session: Session; artifacts:
   return (
     <span className="session-prs">
       {mine.map(artifact => (
-        <a key={artifact.url} className="tag tag-artifact" href={artifact.url} title={`Artifact: ${artifact.title}`}>
+        <a key={artifact.url} className="tag tag-artifact" href={artifact.url} data-tooltip={`Artifact: ${artifact.title}`}>
           {artifact.title}
         </a>
       ))}
@@ -1945,14 +2128,14 @@ const SessionRow = ({
             type="button"
             className="favorite-star"
             aria-label="Favorite; remove from favorites"
-            title="Favorite: click to remove"
+            data-tooltip="Favorite: click to remove"
             onClick={() => void confirmUnfavorite(session)}
           >
             <StarIcon />
           </button>
         )}
       </span>
-      <span className="ctx" title={`Context ${session.ctx}% used`}>
+      <span className="ctx" data-tooltip={`Context ${session.ctx}% used`}>
         <span className="ctx-bar">
           <span className="ctx-fill" style={{ width: `${Math.min(100, session.ctx)}%` }} data-level={levelOf(session.ctx)} />
         </span>
@@ -1961,7 +2144,7 @@ const SessionRow = ({
       </span>
       <span className="session-foot">
         {worktree.name && (
-          <span className="session-worktree" title={session.dir || session.top}>
+          <span className="session-worktree" data-tooltip={session.dir || session.top}>
             <span className="session-worktree-label">in</span>{' '}
             <a href={`ghosttycd://${session.top}`}>{worktree.name}</a>
             {worktree.inside && <span className="session-worktree-inside"> › {worktree.inside}</span>}
@@ -1981,7 +2164,7 @@ const SessionRow = ({
             ago(session.seenAt, now)
           )}
           {agents > 0 && (
-            <span className="agents" title={`${plural(agents, 'subagent')} of this session still working`}>
+            <span className="agents" data-tooltip={`${plural(agents, 'subagent')} of this session still working`}>
               {plural(agents, 'agent')}
             </span>
           )}
@@ -2209,32 +2392,35 @@ const readJiraView = (): JiraView => {
   }
 }
 
-type Links = { tree?: Worktree; pr?: PullRequest; running: Session[] }
+type Links = { trees: Worktree[]; pr?: PullRequest; sessions: Session[] }
 
-const linksOf = (issue: JiraIssue, worktrees: Worktree[], prs: PullRequest[], sessions: Session[]): Links => ({
-  tree: worktrees.find(w => w.branch && mentions(w.branch, issue.key)),
-  pr: prs.find(p => mentions(p.branch, issue.key) || mentions(p.title, issue.key)),
-  running: sessions.filter(x => x.isRunning && mentions(x.branch, issue.key)),
-})
+// What already exists for a ticket: every worktree whose branch names it, the
+// pull request about it, and the Claude sessions on those branches, running or
+// recent. A ticket with a worktree gets these instead of a set-up button.
+const linksOf = (issue: JiraIssue, worktrees: Worktree[], prs: PullRequest[], sessions: Session[]): Links => {
+  const trees = worktrees.filter(w => w.branch && mentions(w.branch, issue.key))
+
+  return {
+    trees,
+    pr: prs.find(p => mentions(p.branch, issue.key) || mentions(p.title, issue.key)),
+    sessions: sessions.filter(x => mentions(x.branch, issue.key) || trees.some(w => w.path === x.top)),
+  }
+}
 
 const IssueLinks = ({ links }: { links: Links }) => (
   <>
-    {links.tree && (
-      <a className="tag" href={`ghosttycd://${links.tree.path}`} title={links.tree.path}>
-        {links.tree.name}
+    {links.trees.map(tree => (
+      <a key={tree.path} className="tag tag-worktree" href={`ghosttycd://${tree.path}`} data-tooltip={`Open ${tree.path} in Ghostty`}>
+        {tree.name}
       </a>
-    )}
+    ))}
     {links.pr && (
       <a className="tag" data-ci={links.pr.ci} href={links.pr.url}>
         PR #{links.pr.number}
         {links.pr.ci !== 'none' && `, ${CI_LABEL[links.pr.ci]}`}
       </a>
     )}
-    {links.running.length > 0 && (
-      <span className="tag tag-session">
-        {links.running.length === 1 ? 'Claude' : `Claude ×${links.running.length}`}
-      </span>
-    )}
+    <SessionLabels linked={links.sessions} />
   </>
 )
 
@@ -2260,7 +2446,7 @@ const JiraTickets = ({
   // A ticket without a worktree yet can get one from the configured first
   // message, with the ticket's key filled in.
   const setupFor = (issue: JiraIssue, links: Links) =>
-    newSession.needsInput && !links.tree ? (
+    newSession.needsInput && links.trees.length === 0 ? (
       <NewSessionButton
         setup={newSession}
         repo={repo}
@@ -2332,7 +2518,7 @@ const JiraTickets = ({
                     <span className="jira-meta">
                       <span>{issue.type}</span>
                       {issue.parentKey && (
-                        <a href={parentUrl(issue)} title={issue.parentSummary}>
+                        <a href={parentUrl(issue)} data-tooltip={issue.parentSummary}>
                           in {issue.parentKey}
                         </a>
                       )}
@@ -2370,11 +2556,11 @@ const JiraTickets = ({
                         <span className="card-type">{issue.type}</span>
                         {setupFor(issue, links)}
                       </span>
-                      <span className="card-summary" title={issue.summary}>
+                      <span className="card-summary" data-tooltip={issue.summary}>
                         {issue.summary}
                       </span>
                       {issue.parentKey && (
-                        <a className="card-parent" href={parentUrl(issue)} title={issue.parentKey}>
+                        <a className="card-parent" href={parentUrl(issue)} data-tooltip={issue.parentKey}>
                           {issue.parentSummary || issue.parentKey}
                         </a>
                       )}
@@ -2637,7 +2823,7 @@ const ContributionsCard = ({ contributions }: { contributions: Contributions | n
 }
 
 const MEMORY_TYPES = ['project', 'reference', 'feedback', 'user'] as const
-const MEMORY_PAGE = 10
+const MEMORY_PAGE = 5
 const FRESH_MS = 86_400_000
 
 // The small markdown a memory note uses: **bold**, `code` and [[links]] to
@@ -2659,7 +2845,7 @@ const Inline = ({ text, links }: { text: string; links: LinkResolver }) => (
             {part.slice(2, -2)}
           </button>
         ) : (
-          <span key={i} className="memory-link" data-missing title="No note with this name yet">
+          <span key={i} className="memory-link" data-missing data-tooltip="No note with this name yet">
             {part.slice(2, -2)}
           </span>
         )
@@ -2731,10 +2917,232 @@ const readMemoryView = (): 'list' | 'graph' => {
   }
 }
 
+const PAGE = 5
+
+// The first five of a list, with a button that shows the rest; it folds back
+// whenever resetKey changes, such as on a new tab.
+const usePaged = <T,>(items: T[], resetKey: unknown = null) => {
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => setShowAll(false), [resetKey])
+
+  const visible = showAll ? items : items.slice(0, PAGE)
+  const toggle =
+    items.length > PAGE ? (
+      <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+        {showAll ? 'Show fewer' : `Show ${items.length - PAGE} more`}
+      </button>
+    ) : null
+
+  return { visible, toggle }
+}
+
+const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', auth: 'Needs authentication', failed: 'Failed' }
+const MCP_ORDER: Record<McpServer['status'], number> = { failed: 0, auth: 1, connected: 2 }
+
+// The MCP servers Claude Code would load from the watched repository, with the
+// health `claude mcp list` reports: failures first, then the ones waiting for a
+// sign-in, then the connected ones.
+const McpCard = ({ mcp, now }: { mcp: ClaudeKnowledge['mcp']; now: number }) => {
+  const [filter, setFilter] = useState<McpServer['status'] | 'all'>('all')
+  const [isChecking, setIsChecking] = useState(false)
+  const counts = { connected: 0, auth: 0, failed: 0 }
+
+  for (const server of mcp.servers) counts[server.status] += 1
+
+  const shown = mcp.servers
+    .filter(s => filter === 'all' || s.status === filter)
+    .sort((a, b) => MCP_ORDER[a.status] - MCP_ORDER[b.status] || a.name.localeCompare(b.name))
+  const paged = usePaged(shown, filter)
+
+  const check = async () => {
+    setIsChecking(true)
+    await fetch('/api/knowledge/refresh', { method: 'POST', headers: { 'X-Claude-Console': '1' } }).catch(() => null)
+    window.dispatchEvent(new Event('claude-console:refresh'))
+    setIsChecking(false)
+  }
+
+  return (
+    <section className="panel mcp" aria-labelledby="mcp-title">
+      <header className="panel-head">
+        <h2 id="mcp-title">MCP servers</h2>
+        <div className="filters" role="tablist" aria-label="MCP servers by state">
+          {(['all', 'failed', 'auth', 'connected'] as const).map(option => (
+            <button key={option} type="button" role="tab" aria-selected={filter === option} onClick={() => setFilter(option)}>
+              {option === 'all' ? 'All' : MCP_LABEL[option]}
+              <span className="count"> {option === 'all' ? mcp.servers.length : counts[option]}</span>
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ghost mcp-check" onClick={() => void check()} disabled={isChecking}>
+          {isChecking ? 'Checking…' : 'Check again'}
+        </button>
+      </header>
+      {mcp.error ? (
+        <p className="empty">{mcp.error}</p>
+      ) : mcp.checkedAt === 0 ? (
+        <p className="empty">Checking the MCP servers…</p>
+      ) : shown.length === 0 ? (
+        <p className="empty">No server in this state.</p>
+      ) : (
+        <ul className="mcp-list">
+          {paged.visible.map(server => (
+            <li key={server.name} className="mcp-server" data-status={server.status}>
+              <span className="mcp-dot" aria-hidden />
+              <span className="mcp-name">{server.name}</span>
+              <span className="mcp-state">{MCP_LABEL[server.status]}</span>
+              <code className="mcp-target" data-tooltip={server.target}>
+                {server.target}
+              </code>
+              {server.detail && <span className="mcp-detail">{server.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {shown.length > 0 && paged.toggle}
+      {mcp.checkedAt > 0 && <p className="panel-foot">Checked {ago(mcp.checkedAt, now)}</p>}
+    </section>
+  )
+}
+
+const InstructionItem = ({ item, now }: { item: Instruction; now: number }) => {
+  const [isOpen, setIsOpen] = useState(false)
+
+  return (
+    <li className="instruction" data-open={isOpen}>
+      <button type="button" className="instruction-head" aria-expanded={isOpen} onClick={() => setIsOpen(v => !v)}>
+        <span className="instruction-title">{item.title}</span>
+        <span className="tag">{item.scope === 'user' ? 'yours' : 'project'}</span>
+        <code className="instruction-path">{item.path}</code>
+        <span className="instruction-age" data-tooltip={new Date(item.updatedAt).toLocaleString()}>
+          {ago(item.updatedAt, now)}
+        </span>
+      </button>
+      {!isOpen && item.summary && <p className="instruction-summary">{item.summary}</p>}
+      {isOpen && <pre className="instruction-body">{item.body}</pre>}
+    </li>
+  )
+}
+
+// The CLAUDE.md files and rules Claude Code follows here. Clicking one shows it.
+const InstructionsCard = ({ items, now }: { items: Instruction[]; now: number }) => {
+  const paged = usePaged(items)
+
+  return (
+  <section className="panel instructions" aria-labelledby="instructions-title">
+    <header className="panel-head">
+      <h2 id="instructions-title">Instructions</h2>
+      <span className="jira-summary">{plural(items.length, 'file')}</span>
+    </header>
+    {items.length === 0 ? (
+      <p className="empty">
+        No <code>CLAUDE.md</code> or rule file, yours or the repository's.
+      </p>
+    ) : (
+      <>
+        <ul className="instruction-list">
+          {paged.visible.map(item => (
+            <InstructionItem key={item.path} item={item} now={now} />
+          ))}
+        </ul>
+        {paged.toggle}
+      </>
+    )}
+  </section>
+  )
+}
+
+const HOOK_SCOPE: Record<string, string> = { user: 'yours', project: 'project', local: 'local' }
+
+// The hooks Claude Code runs, from your settings and the repository's.
+const HooksCard = ({ hooks }: { hooks: ClaudeKnowledge['hooks'] }) => {
+  const paged = usePaged(hooks)
+
+  return (
+  <section className="panel hooks" aria-labelledby="hooks-title">
+    <header className="panel-head">
+      <h2 id="hooks-title">Hooks</h2>
+      <span className="jira-summary">{plural(hooks.length, 'hook')}</span>
+    </header>
+    {hooks.length === 0 ? (
+      <p className="empty">No hook in your settings or the repository's.</p>
+    ) : (
+      <>
+      <ul className="hook-list">
+        {paged.visible.map((hook, at) => (
+          <li key={at} className="hook">
+            <span className="hook-when">
+              <strong>{hook.event}</strong>
+              {hook.matcher && <code>{hook.matcher}</code>}
+              <span className="tag">{HOOK_SCOPE[hook.scope]}</span>
+            </span>
+            <code className="hook-command" data-tooltip={hook.command}>
+              {hook.command}
+            </code>
+          </li>
+        ))}
+      </ul>
+      {paged.toggle}
+      </>
+    )}
+  </section>
+  )
+}
+
+type ExtensionTab = 'plugins' | 'commands' | 'agents'
+
+const EXTENSION_TABS: Array<{ id: ExtensionTab; label: string; kinds: Extension['kind'][] }> = [
+  { id: 'plugins', label: 'Plugins', kinds: ['plugin', 'local plugin'] },
+  { id: 'commands', label: 'Commands', kinds: ['command'] },
+  { id: 'agents', label: 'Agents', kinds: ['agent'] },
+]
+
+// Plugins (from marketplaces and local folders), slash commands and subagents.
+const ExtensionsCard = ({ extensions }: { extensions: Extension[] }) => {
+  const [tab, setTab] = useState<ExtensionTab>('plugins')
+  const of = (id: ExtensionTab) => extensions.filter(e => EXTENSION_TABS.find(t => t.id === id)!.kinds.includes(e.kind))
+  const shown = of(tab).sort((a, b) => Number(b.isEnabled) - Number(a.isEnabled) || a.name.localeCompare(b.name))
+  const paged = usePaged(shown, tab)
+
+  return (
+    <section className="panel extensions" aria-labelledby="extensions-title">
+      <header className="panel-head">
+        <h2 id="extensions-title">Extensions</h2>
+        <div className="filters" role="tablist" aria-label="Extensions">
+          {EXTENSION_TABS.map(option => (
+            <button key={option.id} type="button" role="tab" aria-selected={tab === option.id} onClick={() => setTab(option.id)}>
+              {option.label}
+              <span className="count"> {of(option.id).length}</span>
+            </button>
+          ))}
+        </div>
+      </header>
+      {shown.length === 0 ? (
+        <p className="empty">None here, yours or the repository's.</p>
+      ) : (
+        <ul className="extension-list">
+          {paged.visible.map(item => (
+            <li key={`${item.kind}-${item.scope}-${item.name}`} className="extension" data-enabled={item.isEnabled}>
+              <span className="extension-head">
+                <span className="extension-name">{item.kind === 'command' ? `/${item.name}` : item.name}</span>
+                {item.kind === 'local plugin' && <span className="tag">local</span>}
+                <span className="tag">{item.scope === 'user' ? 'yours' : 'project'}</span>
+                {!item.isEnabled && <span className="tag">disabled</span>}
+              </span>
+              {item.description && <span className="extension-description">{item.description}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {shown.length > 0 && paged.toggle}
+    </section>
+  )
+}
+
 type SkillTab = 'personal' | 'project'
 
 const SKILL_TAB_KEY = 'claude-console:skills-tab'
-const SKILL_PAGE = 8
+const SKILL_PAGE = 5
 
 const readSkillTab = (): SkillTab => {
   try {
@@ -2744,7 +3152,7 @@ const readSkillTab = (): SkillTab => {
   }
 }
 
-const SkillItem = ({ skill }: { skill: Skill }) => {
+const SkillItem = ({ skill, now }: { skill: Skill; now: number }) => {
   const [isOpen, setIsOpen] = useState(false)
   const [note, setNote] = useState('')
   const command = `/${skill.name}`
@@ -2763,12 +3171,15 @@ const SkillItem = ({ skill }: { skill: Skill }) => {
         <button
           type="button"
           className="skill-name"
-          title={`Copy ${command}`}
+          data-tooltip={`Copy ${command}`}
           onClick={async () => setNote((await copy(command)) ? 'Copied' : 'Copy failed')}
         >
           {command}
         </button>
         {skill.argumentHint && <code className="skill-args">{skill.argumentHint}</code>}
+        <span className="skill-uses" data-unused={skill.uses === 0 || undefined}>
+          {skill.uses === 0 ? 'not used lately' : `used ${skill.uses}×, last ${ago(skill.lastUsedAt, now)}`}
+        </span>
         {note && (
           <span className="skill-note" role="status">
             {note}
@@ -2780,7 +3191,7 @@ const SkillItem = ({ skill }: { skill: Skill }) => {
           type="button"
           className="skill-description"
           aria-expanded={isOpen}
-          title={isOpen ? 'Show less' : 'Show the whole description'}
+          data-tooltip={isOpen ? 'Show less' : 'Show the whole description'}
           onClick={() => setIsOpen(v => !v)}
         >
           {skill.description}
@@ -2792,8 +3203,9 @@ const SkillItem = ({ skill }: { skill: Skill }) => {
 
 // Your skills, and the ones the watched repository ships: each one's command,
 // arguments and description. Clicking a command copies it.
-const SkillsCard = ({ skills }: { skills: Skill[] }) => {
+const SkillsCard = ({ skills, now }: { skills: Skill[]; now: number }) => {
   const [tab, setTab] = useState<SkillTab>(readSkillTab)
+  const [sort, setSort] = useState<'name' | 'uses'>('name')
   const [query, setQuery] = useState('')
   const [showAll, setShowAll] = useState(false)
   const counts = { personal: skills.filter(s => s.source === 'personal').length, project: skills.filter(s => s.source === 'project').length }
@@ -2801,6 +3213,7 @@ const SkillsCard = ({ skills }: { skills: Skill[] }) => {
   const matching = skills
     .filter(s => s.source === tab)
     .filter(s => !q || `${s.name} ${s.description} ${s.argumentHint}`.toLowerCase().includes(q))
+    .sort((a, b) => (sort === 'uses' ? b.uses - a.uses || b.lastUsedAt - a.lastUsedAt : 0) || a.name.localeCompare(b.name))
   const shown = showAll || q ? matching : matching.slice(0, SKILL_PAGE)
 
   const choose = (next: SkillTab) => {
@@ -2841,6 +3254,13 @@ const SkillsCard = ({ skills }: { skills: Skill[] }) => {
           onChange={e => setQuery(e.target.value)}
           aria-label="Filter skills by name or description"
         />
+        <div className="segmented" role="radiogroup" aria-label="Sort skills">
+          {(['name', 'uses'] as const).map(option => (
+            <button key={option} type="button" role="radio" aria-checked={sort === option} onClick={() => setSort(option)}>
+              {option === 'name' ? 'A–Z' : 'Most used'}
+            </button>
+          ))}
+        </div>
       </header>
       <div id="skills-tabpanel" role="tabpanel">
         {counts[tab] === 0 ? (
@@ -2861,7 +3281,7 @@ const SkillsCard = ({ skills }: { skills: Skill[] }) => {
           <>
             <ul className="skill-list">
               {shown.map(skill => (
-                <SkillItem key={skill.path} skill={skill} />
+                <SkillItem key={skill.path} skill={skill} now={now} />
               ))}
             </ul>
             {!q && matching.length > SKILL_PAGE && (
@@ -3102,26 +3522,6 @@ const ArtifactsCard = ({ artifacts, sessions, now }: { artifacts: PublishedArtif
   )
 }
 
-const ProfileCard = ({ profile }: { profile: Profile | null }) => {
-  if (!profile) return null
-
-  return (
-    <section className="panel profile" aria-label={`Profile of ${profile.name}`}>
-      <img className="profile-photo" src={profile.avatarUrl} alt="" width={64} height={64} />
-      <div className="profile-text">
-        <h2 className="profile-name">
-          <a href={profile.url}>{profile.name}</a>
-        </h2>
-        {profile.bio && <p className="profile-bio">{profile.bio}</p>}
-        <p className="profile-meta">
-          @{profile.login}
-          {profile.location && <>, {profile.location}</>}
-        </p>
-      </div>
-    </section>
-  )
-}
-
 const longDay = (date: string) =>
   new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
@@ -3152,7 +3552,7 @@ const BriefingSessions = ({ briefing }: { briefing: Briefing }) => {
                 <button
                   type="button"
                   className="brief-session-head"
-                  title="Show this session below, when it is still listed"
+                  data-tooltip="Show this session below, when it is still listed"
                   onClick={() =>
                     window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail: session.id }))
                   }
@@ -3295,12 +3695,12 @@ const BriefingSummaryView = ({
         ) : (
           <>
             {summary.generatedAt > 0 && (
-              <span title={new Date(summary.generatedAt).toLocaleString()}>
+              <span data-tooltip={new Date(summary.generatedAt).toLocaleString()}>
                 Written by Claude {summary.model && `(${summary.model})`} {ago(summary.generatedAt, now)}
               </span>
             )}
             {summary.error && paragraphs.length > 0 && (
-              <span className="brief-summary-error" title={summary.error}>
+              <span className="brief-summary-error" data-tooltip={summary.error}>
                 Last update failed
               </span>
             )}
@@ -3331,7 +3731,8 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
     now,
   )
   const developing = snapshot.jira.filter(issue => issue.statusCategory === 'indeterminate')
-  const firstName = snapshot.profile?.name.split(' ')[0] ?? ''
+  const profile = snapshot.profile
+  const firstName = profile?.name.split(' ')[0] ?? ''
   const summary = snapshot.summary
   const hasSummary = summary.status !== 'off'
   const [showDetails, setShowDetails] = useState(false)
@@ -3342,23 +3743,29 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
   return (
     <section className="panel briefing" data-open={isOpen} aria-labelledby="briefing-title">
       <header className="brief-head">
-        <h2 id="briefing-title" className="brief-greeting">
-          {greeting(now)}
-          {firstName && `, ${firstName}`}{' '}
-          <button
-            type="button"
-            className="brief-toggle"
-            aria-expanded={isOpen}
-            aria-controls="briefing-body"
-            onClick={() => setIsOpen(v => !v)}
-          >
-            {isOpen ? '← hide your summary' : '→ read your summary here'}
-          </button>
-        </h2>
-        <span className="brief-date">
-          {new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
-          {briefing && briefing.todaySessions > 0 && <>, {plural(briefing.todaySessions, 'session')} so far today</>}
-        </span>
+        <div className="brief-identity">
+          {profile && (
+            <a className="brief-photo-link" href={profile.url} data-tooltip={`${profile.name} on GitHub`}>
+              <img className="brief-photo" src={profile.avatarUrl} alt="" width={64} height={64} />
+            </a>
+          )}
+          <div className="brief-who">
+            <h2 id="briefing-title" className="brief-greeting">
+              {greeting(now)}
+              {firstName && `, ${firstName}`}
+            </h2>
+            {profile?.bio && <p className="brief-bio">{profile.bio}</p>}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="brief-toggle"
+          aria-expanded={isOpen}
+          aria-controls="briefing-body"
+          onClick={() => setIsOpen(v => !v)}
+        >
+          {isOpen ? 'Hide your summary' : 'Read your summary'}
+        </button>
       </header>
       <div id="briefing-body" hidden={!isOpen}>
       {hasSummary && <BriefingSummaryView summary={summary} prUrls={prUrls} ticketUrls={ticketUrls} now={now} />}
@@ -3531,7 +3938,7 @@ const UsageCard = ({ usage, now }: { usage: Usage | null; now: number }) => {
           <dd>{compact(today.cacheRead)} tokens</dd>
         </div>
         {usage.todayCost !== null && (
-          <div title="Sum of the cost the status line reports for each session seen today, at API prices">
+          <div data-tooltip="Sum of the cost the status line reports for each session seen today, at API prices">
             <dt>At API prices</dt>
             <dd>${usage.todayCost.toFixed(2)}</dd>
           </div>
@@ -3672,6 +4079,208 @@ const useSessionFromUrl = (isReady: boolean) => {
   }, [isReady])
 }
 
+const TOOLTIP_ID = 'console-tooltip'
+const TOOLTIP_DELAY_MS = 350
+const TOOLTIP_GAP = 8
+
+type Tip = { text: string; x: number; top: number; bottom: number }
+
+// One tooltip for the whole page, in the look of the session recap: any element
+// with data-tooltip shows its text above it (or below, near the top of the
+// window) after a short pause on hover, or at once on keyboard focus. It is tied
+// to the element with aria-describedby while it shows.
+const TooltipLayer = () => {
+  const [tip, setTip] = useState<Tip | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let target: HTMLElement | null = null
+
+    const hide = () => {
+      clearTimeout(timer)
+
+      if (target?.getAttribute('aria-describedby') === TOOLTIP_ID) target.removeAttribute('aria-describedby')
+
+      target = null
+      setTip(null)
+    }
+
+    const show = (element: HTMLElement, delay: number) => {
+      hide()
+      target = element
+      timer = setTimeout(() => {
+        const text = element.dataset.tooltip
+
+        if (!text || !element.isConnected) return
+
+        const rect = element.getBoundingClientRect()
+
+        if (!element.hasAttribute('aria-describedby')) element.setAttribute('aria-describedby', TOOLTIP_ID)
+
+        setTip({ text, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom })
+      }, delay)
+    }
+
+    const tooltipOf = (node: EventTarget | null) =>
+      (node instanceof Element ? node.closest<HTMLElement>('[data-tooltip]') : null) ?? null
+
+    const onOver = (event: PointerEvent) => {
+      const element = tooltipOf(event.target)
+
+      if (element === target) return
+      if (element) show(element, TOOLTIP_DELAY_MS)
+      else hide()
+    }
+
+    const onFocusIn = (event: FocusEvent) => {
+      const element = tooltipOf(event.target)
+
+      if (element && element.matches(':focus-visible')) show(element, 0)
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') hide()
+    }
+
+    document.addEventListener('pointerover', onOver)
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('focusout', hide)
+    document.addEventListener('pointerdown', hide)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', hide, true)
+    window.addEventListener('blur', hide)
+
+    return () => {
+      hide()
+      document.removeEventListener('pointerover', onOver)
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('focusout', hide)
+      document.removeEventListener('pointerdown', hide)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', hide, true)
+      window.removeEventListener('blur', hide)
+    }
+  }, [])
+
+  // Placed once its size is known: above when it fits, otherwise below, and
+  // always inside the window.
+  useLayoutEffect(() => {
+    if (!tip || !box.current) {
+      setPlace(null)
+      return
+    }
+
+    const { width, height } = box.current.getBoundingClientRect()
+    const fitsAbove = tip.top - height - TOOLTIP_GAP > 4
+    const left = Math.min(Math.max(8, tip.x - width / 2), window.innerWidth - width - 8)
+
+    setPlace({ left, top: fitsAbove ? tip.top - height - TOOLTIP_GAP : tip.bottom + TOOLTIP_GAP })
+  }, [tip])
+
+  if (!tip) return null
+
+  return (
+    <div
+      ref={box}
+      id={TOOLTIP_ID}
+      role="tooltip"
+      className="tooltip"
+      style={place ? { left: place.left, top: place.top } : { left: -9999, top: -9999 }}
+    >
+      {tip.text}
+    </div>
+  )
+}
+
+type PageTab = 'dashboard' | 'knowledge'
+
+
+const PAGE_TAB_KEY = 'claude-console:page'
+
+const readPageTab = (): PageTab => {
+  try {
+    return localStorage.getItem(PAGE_TAB_KEY) === 'knowledge' ? 'knowledge' : 'dashboard'
+  } catch {
+    return 'dashboard'
+  }
+}
+
+const PAGE_TABS: Array<{ id: PageTab; label: string }> = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'knowledge', label: 'Claude Knowledge' },
+]
+
+const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) => void }) => (
+  <div className="page-tabs" role="tablist" aria-label="Console pages">
+    {PAGE_TABS.map(option => (
+      <button
+        key={option.id}
+        type="button"
+        role="tab"
+        id={`page-tab-${option.id}`}
+        aria-selected={tab === option.id}
+        aria-controls="page-panel"
+        tabIndex={tab === option.id ? 0 : -1}
+        onClick={() => onChoose(option.id)}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+
+          event.preventDefault()
+
+          const at = PAGE_TABS.findIndex(o => o.id === tab)
+          const next = PAGE_TABS[(at + (event.key === 'ArrowRight' ? 1 : PAGE_TABS.length - 1)) % PAGE_TABS.length]!
+
+          onChoose(next.id)
+          document.getElementById(`page-tab-${next.id}`)?.focus()
+        }}
+      >
+        {option.label}
+      </button>
+    ))}
+  </div>
+)
+
+// Keeps the chosen page across visits, and comes back to the dashboard when
+// something asks to show a session, which only the dashboard lists.
+const usePageTab = () => {
+  const [tab, setTab] = useState<PageTab>(readPageTab)
+
+  const choose = useCallback((next: PageTab) => {
+    setTab(next)
+
+    try {
+      localStorage.setItem(PAGE_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }, [])
+
+  useEffect(() => {
+    const onFocus = (event: Event) => {
+      if (readPageTab() === 'dashboard' && tab === 'dashboard') return
+
+      choose('dashboard')
+
+      // The sessions panel was not mounted to hear it: ask again once it is.
+      const detail = (event as CustomEvent<string>).detail
+
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail }))),
+      )
+    }
+
+    if (tab === 'dashboard') return
+
+    window.addEventListener('claude-console:focus-session', onFocus)
+
+    return () => window.removeEventListener('claude-console:focus-session', onFocus)
+  }, [tab, choose])
+
+  return [tab, choose] as const
+}
+
 export const App = () => {
   const { snapshot, error, isRefreshing, isFetching, refresh } = useSnapshot()
   const now = useNow()
@@ -3679,6 +4288,8 @@ export const App = () => {
   useSessionFromUrl(!!snapshot)
 
   useExternalLinks()
+
+  const [page, choosePage] = usePageTab()
 
   const title = snapshot?.features.title
 
@@ -3711,6 +4322,7 @@ export const App = () => {
     snapshot.errors.contributions && `Activity could not be read: ${snapshot.errors.contributions}`,
     snapshot.errors.memory && `Memory could not be read: ${snapshot.errors.memory}`,
     snapshot.errors.skills && `Skills could not be read: ${snapshot.errors.skills}`,
+    snapshot.errors.knowledge && `Claude's setup could not be read: ${snapshot.errors.knowledge}`,
     snapshot.errors.artifacts && `Artifacts could not be read: ${snapshot.errors.artifacts}`,
   ].filter(Boolean)
 
@@ -3718,6 +4330,7 @@ export const App = () => {
     <>
       <WindowBar title={snapshot.features.title} hasIcon={snapshot.features.hasIcon} />
       <ConfirmHost />
+      <TooltipLayer />
       <main className="shell">
         <BurstLayer />
         <header className="top">
@@ -3729,7 +4342,7 @@ export const App = () => {
                 data-busy={isFetching || isRefreshing}
                 role="status"
                 aria-label={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
-                title={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
+                data-tooltip={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
               />
               Worktrees {ago(snapshot.worktreesAt, now)}, pull requests {ago(snapshot.prsAt, now)}
             </span>
@@ -3745,45 +4358,73 @@ export const App = () => {
           ))}
         </header>
         <BriefingCard snapshot={snapshot} now={now} />
-        <div className="grid">
-          <div className="column">
-            <Sessions
-              sessions={snapshot.sessions}
-              now={now}
-              worktrees={snapshot.worktrees}
-              prs={snapshot.prs}
-              queue={snapshot.queue}
-              artifacts={snapshot.artifacts}
-              newSession={snapshot.features.newSession}
-              repo={snapshot.repo}
-              favoriteSessions={snapshot.favoriteSessions}
-            />
-            <Worktrees worktrees={snapshot.worktrees} now={now} />
-            {snapshot.features.jira && (
-              <JiraTickets
-                issues={snapshot.jira}
-                worktrees={snapshot.worktrees}
-                prs={snapshot.prs}
-                sessions={snapshot.sessions}
-                now={now}
-                newSession={snapshot.features.newSession}
-                repo={snapshot.repo}
-              />
-            )}
-            <SkillsCard skills={snapshot.skills} />
-            <MemoryCard notes={snapshot.memory} now={now} />
+        <PageTabs tab={page} onChoose={choosePage} />
+        <div id="page-panel" role="tabpanel" aria-labelledby={`page-tab-${page}`}>
+        {page === 'dashboard' ? (
+          <>
+            <div className="grid">
+              <div className="column">
+                <Sessions
+                  sessions={snapshot.sessions}
+                  now={now}
+                  worktrees={snapshot.worktrees}
+                  prs={snapshot.prs}
+                  queue={snapshot.queue}
+                  artifacts={snapshot.artifacts}
+                  newSession={snapshot.features.newSession}
+                  repo={snapshot.repo}
+                  favoriteSessions={snapshot.favoriteSessions}
+                />
+                <Worktrees worktrees={snapshot.worktrees} now={now} />
+                <PullRequests
+                  prs={snapshot.prs}
+                  assigned={snapshot.assignedPrs}
+                  now={now}
+                  sessions={snapshot.sessions}
+                  setup={snapshot.features.newSession}
+                  repo={snapshot.repo}
+                />
+                {snapshot.features.jira && (
+                  <JiraTickets
+                    issues={snapshot.jira}
+                    worktrees={snapshot.worktrees}
+                    prs={snapshot.prs}
+                    sessions={snapshot.sessions}
+                    now={now}
+                    newSession={snapshot.features.newSession}
+                    repo={snapshot.repo}
+                  />
+                )}
+              </div>
+              <div className="column">
+                <ContributionsCard contributions={snapshot.contributions} />
+                <UsageCard usage={snapshot.usage} now={now} />
+                {snapshot.features.reviewQueue && (
+                  <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="knowledge">
+            <div className="grid knowledge-wide">
+              <MemoryCard notes={snapshot.memory} now={now} />
+              <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
+            </div>
+            <div className="grid knowledge-wide">
+              <SkillsCard skills={snapshot.skills} now={now} />
+              <McpCard mcp={snapshot.knowledge.mcp} now={now} />
+            </div>
+            <div className="grid knowledge-wide">
+              <InstructionsCard items={snapshot.knowledge.instructions} now={now} />
+              <HooksCard hooks={snapshot.knowledge.hooks} />
+            </div>
+            <div className="grid knowledge-wide">
+              <ExtensionsCard extensions={snapshot.knowledge.extensions} />
+            </div>
           </div>
-          <div className="column">
-            <ProfileCard profile={snapshot.profile} />
-            <ContributionsCard contributions={snapshot.contributions} />
-            <UsageCard usage={snapshot.usage} now={now} />
-            <PullRequests prs={snapshot.prs} now={now} sessions={snapshot.sessions} />
-            {snapshot.features.reviewQueue && (
-              <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
-            )}
-            <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
-          </div>
-        </div>
+        )}
+      </div>
       </main>
       <footer className="credit">
         <a href="https://github.com/interaminense">@interaminense</a>

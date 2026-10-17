@@ -78,6 +78,7 @@ export type Check = {
 
 export type PullRequest = {
   repo: string
+  author: string
   number: number
   title: string
   url: string
@@ -144,6 +145,16 @@ export type QueuedPr = {
 
 export type ReviewQueue = { name: string; repo: string; waiting: QueuedPr[]; recent: QueuedPr[] }
 
+// What the worktrees take on disk, measured in the background, and how full the
+// disk is.
+export type DiskUsage = {
+  worktrees: Array<{ path: string; bytes: number }>
+  totalBytes: number
+  scannedAt: number
+  isScanning: boolean
+  disk: { size: number; used: number; free: number } | null
+}
+
 export type Battery = { percent: number; isCharging: boolean; isPluggedIn: boolean }
 
 export type ConsoleFeatures = {
@@ -151,7 +162,13 @@ export type ConsoleFeatures = {
   hasIcon: boolean
   jira: boolean
   reviewQueue: { name: string; repo: string } | null
-  newSession: { needsInput: boolean; inputLabel: string; prompt: string; description: string }
+  newSession: {
+    needsInput: boolean
+    inputLabel: string
+    prompt: string
+    description: string
+    environments: Array<{ label: string; value: string }>
+  }
 }
 
 export type ContributionDay = { date: string; github: number; claude: number }
@@ -165,6 +182,31 @@ export type Skill = {
   source: 'personal' | 'project'
   path: string
   updatedAt: number
+  // Uses in the scanned transcripts, by Claude or by typing the command.
+  uses: number
+  lastUsedAt: number
+}
+
+export type McpServer = { name: string; target: string; status: 'connected' | 'auth' | 'failed'; detail: string }
+
+// A CLAUDE.md or rule file: its first heading and paragraph, and the full text.
+export type Instruction = { scope: 'user' | 'project'; path: string; title: string; summary: string; body: string; updatedAt: number }
+
+export type Hook = { scope: 'user' | 'project' | 'local'; event: string; matcher: string; command: string }
+
+export type Extension = {
+  kind: 'plugin' | 'local plugin' | 'command' | 'agent'
+  scope: 'user' | 'project'
+  name: string
+  description: string
+  isEnabled: boolean
+}
+
+export type ClaudeKnowledge = {
+  mcp: { servers: McpServer[]; checkedAt: number; error: string }
+  instructions: Instruction[]
+  hooks: Hook[]
+  extensions: Extension[]
 }
 
 export type MemoryNote = {
@@ -258,12 +300,15 @@ export type Snapshot = {
   contributions: Contributions | null
   memory: MemoryNote[]
   skills: Skill[]
+  knowledge: ClaudeKnowledge
   artifacts: PublishedArtifact[]
   profile: Profile | null
   briefing: Briefing | null
   summary: BriefingSummary
   recentPrs: RecentPr[]
+  // Open pull requests by others that are assigned to you or ask for your review.
+  assignedPrs: PullRequest[]
   worktreesAt: number
   prsAt: number
-  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; skills?: string; artifacts?: string; profile?: string }
+  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; skills?: string; knowledge?: string; artifacts?: string; profile?: string }
 }

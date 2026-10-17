@@ -27,7 +27,14 @@ export type ConsoleConfig = {
   // What the "+" beside the session search starts: a Claude Code session in the
   // repository whose first message is `prompt`, with {input} replaced by what
   // you type (a ticket or a name). Without it, the "+" starts an empty session.
-  newSession: { prompt: string; inputLabel: string; description: string } | null
+  // {env} in the prompt is replaced by the chosen environment's value, or by
+  // nothing when none is chosen.
+  newSession: {
+    prompt: string
+    inputLabel: string
+    description: string
+    environments: Array<{ label: string; value: string }>
+  } | null
   // The written summary at the top of the briefing, by Claude Code with the
   // daily-briefing skill. Off without this section, since each run uses your plan.
   briefing: { model: string; language: string; maxBudgetUsd: number } | null
@@ -96,6 +103,7 @@ export const resolveConfig = (values: Partial<ConsoleConfig>, env: NodeJS.Proces
           prompt: values.newSession.prompt,
           inputLabel: values.newSession.inputLabel || 'Name',
           description: values.newSession.description || '',
+          environments: (values.newSession.environments ?? []).filter(e => e?.label && /^[a-z0-9-]+$/i.test(e.value ?? '')),
         }
       : null,
     briefing: values.briefing
@@ -134,21 +142,28 @@ export const featuresOf = (c: ConsoleConfig): ConsoleFeatures => ({
         inputLabel: c.newSession.inputLabel,
         prompt: c.newSession.prompt,
         description: c.newSession.description,
+        environments: c.newSession.environments,
       }
-    : { needsInput: false, inputLabel: '', prompt: '', description: '' },
+    : { needsInput: false, inputLabel: '', prompt: '', description: '', environments: [] },
 })
 
 // What a new session's first message is: the configured prompt with {input}
-// filled in. Input is limited to the characters of a ticket or a name, so what
-// reaches the terminal is never more than that.
+// and {env} filled in. Input is a ticket or a name, or a GitHub pull request's
+// address, and the environment one of the configured values, so what reaches
+// the terminal is never more than that.
 export const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
+export const PR_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/
 
-export const newSessionPrompt = (c: ConsoleConfig, input: string) => {
+export const newSessionPrompt = (c: ConsoleConfig, input: string, env = '') => {
   if (!c.newSession) return ''
 
-  if (!c.newSession.prompt.includes('{input}')) return c.newSession.prompt
+  const { prompt, environments } = c.newSession
 
-  if (!INPUT_PATTERN.test(input)) throw new Error('Use only letters, numbers, ".", "-" and "_", up to 80 characters.')
+  if (env && !environments.some(e => e.value === env)) throw new Error('Not one of the configured environments.')
 
-  return c.newSession.prompt.replaceAll('{input}', input)
+  if (prompt.includes('{input}') && !INPUT_PATTERN.test(input) && !PR_URL_PATTERN.test(input)) {
+    throw new Error('Use a ticket or a name (letters, numbers, ".", "-" and "_"), or a GitHub pull request link.')
+  }
+
+  return prompt.replaceAll('{input}', input).replaceAll('{env}', env).replace(/\s+/g, ' ').trim()
 }

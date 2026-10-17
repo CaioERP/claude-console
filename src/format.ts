@@ -12,6 +12,20 @@ export const ago = (ms: number, now: number) => {
   return `${Math.floor(s / 86_400)}d ago`
 }
 
+// A size in bytes the way a disk reports it: 79.5 GB, 512 MB.
+export const bytesLabel = (bytes: number) => {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+
+  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
 export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
 
 export const headline = (s: Snapshot): string => {

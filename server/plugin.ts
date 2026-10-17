@@ -4,10 +4,11 @@ import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
 import { config, newSessionPrompt } from './config'
-import { REPO, getSnapshot, isWorktreePath, refreshSummary, renameSession, setFavorite, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import { REPO, getSnapshot, isWorktreePath, refreshKnowledge, refreshSummary, renameSession, setFavorite, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
 import { readBattery } from './system'
+import { diskUsage, refreshDiskFree } from './disk'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -64,14 +65,17 @@ const handleRemoveWorktree = async (req: IncomingMessage, res: ServerResponse) =
   }
 
   try {
-    const { path } = JSON.parse(await readBody(req)) as { path?: string }
-    await removeDormantWorktree(String(path ?? ''))
+    const { path, force } = JSON.parse(await readBody(req)) as { path?: string; force?: boolean }
+    await removeDormantWorktree(String(path ?? ''), force === true)
     res.statusCode = 204
     res.end()
   } catch (error) {
     res.statusCode = 400
     res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    const message = error instanceof Error ? error.message : String(error)
+
+    // Only git's own refusal over modified or untracked files may be forced.
+    res.end(JSON.stringify({ error: message, canForce: /modified or untracked files|use --force/i.test(message) }))
   }
 }
 
@@ -156,7 +160,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     }
 
     try {
-      const { dir, input } = JSON.parse(await readBody(req)) as { dir?: string; input?: string }
+      const { dir, input, env } = JSON.parse(await readBody(req)) as { dir?: string; input?: string; env?: string }
 
       // Given a worktree, an empty session in it; otherwise the configured one in
       // the repository.
@@ -165,7 +169,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
 
         await startSession(String(dir))
       } else {
-        await startSession(REPO, newSessionPrompt(config, String(input ?? '').trim()))
+        await startSession(REPO, newSessionPrompt(config, String(input ?? '').trim(), String(env ?? '')))
       }
 
       res.statusCode = 204
@@ -175,6 +179,19 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
       res.setHeader('Content-Type', 'application/json')
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
     }
+    return
+  }
+
+  if (url.pathname === '/api/knowledge/refresh') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    await refreshKnowledge().catch(() => undefined)
+    res.statusCode = 204
+    res.end()
     return
   }
 
@@ -260,7 +277,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
   if (url.pathname === '/api/system') {
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Cache-Control', 'no-store')
-    res.end(JSON.stringify({ battery: await readBattery() }))
+    await refreshDiskFree(REPO)
+    res.end(JSON.stringify({ battery: await readBattery(), disk: diskUsage() }))
     return
   }
 

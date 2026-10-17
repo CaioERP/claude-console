@@ -8,6 +8,11 @@ A local dashboard (Vite + React + TypeScript) whose API is a Vite plugin in `ser
 - Test data must be fictional: example.com hosts, `ABC-1` tickets, `octocat`, zeroed session ids.
 - Personal state the console keeps (favorites, names, written briefings) lives in `~/.config/claude-console` too; never move it into the repository or into `~/.claude`.
 
+## UI Conventions
+
+- Hover text goes in `data-tooltip`, never `title`: one `TooltipLayer` shows it in the console's own style, ties it to the element with `aria-describedby`, and the browser's native tooltip never appears.
+- Confirmations and notices use `askConfirm` and `showNotice` (the `Modal`), never `window.confirm` or `window.alert`.
+
 ## Written Briefing
 
 - The text is written by `server/summary.ts`, which runs `claude -p "/daily-briefing"` from the console's own folder, so the `daily-briefing` skill in `.claude/skills` is what drives it. Change the writing there, not in code.

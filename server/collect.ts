@@ -12,6 +12,8 @@ import { CONFIG_PATH, config, featuresOf } from './config'
 import { collectJira } from './jira'
 import { collectMemory } from './memory'
 import { collectSkills } from './skills'
+import { refreshDiskUsage } from './disk'
+import { collectKnowledge } from './claude-config'
 import { briefingInput } from './briefing-input'
 import { currentSummary, ensureSummary } from './summary'
 import { collectReviewQueue } from './queue'
@@ -359,6 +361,7 @@ export const collectWorktrees = async (sessions: Session[], now: number): Promis
 }
 
 type SearchHit = {
+  author?: { login?: string }
   number: number
   title: string
   url: string
@@ -377,18 +380,36 @@ type PrDetail = {
   statusCheckRollup: RollupItem[] | null
 }
 
-export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> => {
-  const hits = JSON.parse(
+const searchPrs = async (qualifier: string) =>
+  JSON.parse(
     await run(
       'gh',
       [
-        'search', 'prs', '--author=@me', '--state=open', '--limit', '50',
-        '--json', 'number,title,url,isDraft,createdAt,updatedAt,repository',
+        'search', 'prs', qualifier, '--state=open', '--limit', '50',
+        '--json', 'number,title,url,isDraft,createdAt,updatedAt,repository,author',
       ],
       { timeoutMs: 30_000 },
     ),
   ) as SearchHit[]
 
+let ghLogin = ''
+
+// Open pull requests by others that are assigned to you or ask for your
+// review, once each.
+export const collectAssignedPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> => {
+  ghLogin ||= (await run('gh', ['api', 'user', '--jq', '.login'])).trim()
+
+  const [assigned, requested] = await Promise.all([searchPrs('--assignee=@me'), searchPrs('--review-requested=@me')])
+  const byUrl = new Map([...assigned, ...requested].map(hit => [hit.url, hit] as const))
+  const others = [...byUrl.values()].filter(hit => hit.author?.login !== ghLogin)
+
+  return detailPrs(others, worktrees)
+}
+
+export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> =>
+  detailPrs(await searchPrs('--author=@me'), worktrees)
+
+const detailPrs = async (hits: SearchHit[], worktrees: Worktree[]): Promise<PullRequest[]> => {
   return mapLimit(hits, 4, async hit => {
     const repo = hit.repository.nameWithOwner
     const detail = await quiet(
@@ -407,6 +428,7 @@ export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> 
 
     return {
       repo,
+      author: hit.author?.login ?? '',
       number: hit.number,
       title: hit.title,
       url: hit.url,
@@ -495,11 +517,13 @@ const state: Snapshot = {
   contributions: null,
   memory: [],
   skills: [],
+  knowledge: { mcp: { servers: [], checkedAt: 0, error: '' }, instructions: [], hooks: [], extensions: [] },
   artifacts: [],
   profile: null,
   briefing: null,
   summary: { status: 'off', text: '', generatedAt: 0, model: '', error: '' },
   recentPrs: [],
+  assignedPrs: [],
   worktreesAt: 0,
   prsAt: 0,
   errors: {},
@@ -564,6 +588,13 @@ const refreshUsage = () =>
     }
 
     try {
+      state.knowledge = await collectKnowledge(REPO)
+      delete state.errors.knowledge
+    } catch (error) {
+      state.errors.knowledge = error instanceof Error ? error.message : String(error)
+    }
+
+    try {
       state.memory = await collectMemory(REPO)
       delete state.errors.memory
     } catch (error) {
@@ -587,10 +618,11 @@ const refreshWorktrees = () =>
     try {
       state.sessions = await collectSessions(now)
       state.worktrees = await collectWorktrees(state.sessions, now)
+      refreshDiskUsage(REPO, state.worktrees.map(w => w.path))
       state.worktreesAt = Date.now()
       delete state.errors.worktrees
 
-      for (const pr of state.prs) {
+      for (const pr of [...state.prs, ...state.assignedPrs]) {
         pr.worktreePath = state.worktrees.find(w => w.branch && w.branch === pr.branch)?.path ?? ''
       }
     } catch (error) {
@@ -602,11 +634,14 @@ const refreshWorktrees = () =>
 
 const refreshPrs = () =>
   (prsJob ??= (async () => {
-    const [prs, queue, recent] = await Promise.allSettled([
+    const [prs, queue, recent, assigned] = await Promise.allSettled([
       collectPrs(state.worktrees),
       config.reviewQueue ? collectReviewQueue(config.reviewQueue) : Promise.resolve(null),
       collectRecentPrs(Date.now()),
+      collectAssignedPrs(state.worktrees),
     ])
+
+    if (assigned.status === 'fulfilled') state.assignedPrs = assigned.value
 
     if (recent.status === 'fulfilled') state.recentPrs = recent.value
 
@@ -696,6 +731,11 @@ export const refreshSummary = (options: { force?: boolean } = {}) => {
   ensureSummary(briefingInput(state, config.briefing.language, Date.now()), config.briefing, options)
 }
 
+// Checks the MCP servers again now, and rereads the rest of Claude's setup.
+export const refreshKnowledge = async () => {
+  state.knowledge = await collectKnowledge(REPO, { forceMcp: true })
+}
+
 // Gives a session a name in the console, or takes it away when name is empty.
 export const renameSession = async (id: string, name: string) => {
   const known = state.sessions.some(s => s.id === id) || (await readFavorites()).some(f => f.id === id)
@@ -766,11 +806,12 @@ export const setFavorite = async (id: string, isFavorite: boolean) => {
   return (await readFavorites()).map(f => f.id)
 }
 
-// Removes a dormant worktree's folder with `git worktree remove`, never forced:
-// git refuses when it holds modified or untracked files, so uncommitted work is
-// never lost, and the branch stays. Only a dormant worktree listed by git, other
+// Removes a dormant worktree's folder with `git worktree remove`. Unforced, git
+// refuses when it holds modified or untracked files, so uncommitted work is
+// never lost; forced, only after the person confirmed losing those files. The
+// branch and its commits stay either way. Only a dormant worktree listed by git, other
 // than the main checkout, with no dev server and no running session, qualifies.
-export const removeDormantWorktree = async (path: string) => {
+export const removeDormantWorktree = async (path: string, force = false) => {
   await refreshWorktrees()
 
   const worktree = state.worktrees.find(w => w.path === path)
@@ -781,7 +822,7 @@ export const removeDormantWorktree = async (path: string) => {
   if (worktree.sessions.some(s => s.isRunning)) throw new Error('A Claude session is running in it.')
 
   try {
-    await run('git', ['-C', REPO, 'worktree', 'remove', '--', path], { timeoutMs: 5 * 60_000 })
+    await run('git', ['-C', REPO, 'worktree', 'remove', ...(force ? ['--force'] : []), '--', path], { timeoutMs: 5 * 60_000 })
   } catch (error) {
     const message = (error as { stderr?: string }).stderr || (error instanceof Error ? error.message : String(error))
 

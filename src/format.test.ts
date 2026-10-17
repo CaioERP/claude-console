@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { PullRequest, RecentPr, Session } from '../shared/types'
-import { blend, briefingPrs, summaryParagraphs, elapsedLabel, greeting, memoryKey, memoryLinks, prBelongsTo, mentions, orderStatuses, quartileScale, resumeCommand, sessionMatches, spinnerFrame, verbFor, worktreeOf } from './format'
+import { blend, briefingPrs, bytesLabel, summaryParagraphs, elapsedLabel, greeting, memoryKey, memoryLinks, prBelongsTo, mentions, orderStatuses, quartileScale, resumeCommand, sessionMatches, spinnerFrame, verbFor, worktreeOf } from './format'
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: 's1',
@@ -244,5 +244,14 @@ describe('summaryParagraphs', () => {
       { kind: 'bold', children: [{ kind: 'link', text: 'ABC-1', url: 'https://example.atlassian.net/browse/ABC-1' }, { kind: 'text', text: ' moved' }] },
     ])
     expect(summaryParagraphs('<img src=x onerror=alert(1)>', prs, tickets)).toEqual([[{ kind: 'text', text: '<img src=x onerror=alert(1)>' }]])
+  })
+})
+
+describe('bytesLabel', () => {
+  it('reads like a disk size', () => {
+    expect(bytesLabel(79_457_043_349)).toBe('79.5 GB')
+    expect(bytesLabel(514_941_128_704)).toBe('515 GB')
+    expect(bytesLabel(4_908_593)).toBe('4.9 MB')
+    expect(bytesLabel(512)).toBe('512 B')
   })
 })

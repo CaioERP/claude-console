@@ -76,7 +76,7 @@ The console reads `~/.config/claude-console/config.json`, or the file named by `
 | `devServer.process` | Text in a listening process's command line that marks it as a worktree's dev server. Default `webpack`. |
 | `devEnv` | `{ files, key, rules }`: the env files (relative to each worktree) that hold the URL its dev server talks to, the variable that holds it, and `{ match, name }` rules that name the environment by host, such as `{ "match": "-stg.", "name": "STG" }`. |
 | `jira` | `{ site, jql }`: your Jira Cloud site, like `https://example.atlassian.net`, and optionally the search. The default search is your open tickets. Requires `JIRA_API_USER` and `JIRA_API_TOKEN` in `~/.config/claude-console/env`. |
-| `newSession` | `{ prompt, inputLabel, description }`: what the **+** beside the session search starts, after a confirmation window that shows `description`, the folder and the command. It opens a new Claude Code session in the repository, in a new Ghostty tab, with `prompt` as its first message, such as a skill: `"/setup-faro-worktree {input}"`. When `prompt` holds `{input}`, the **+** first asks for it under `inputLabel`; only letters, numbers, `.`, `-` and `_` are accepted. Without it, the **+** starts an empty session. |
+| `newSession` | `{ prompt, inputLabel, description, environments }`: what the **+** beside the session search starts, after a confirmation window that shows `description`, the folder and the command. `environments` is a list of `{ label, value }` the window offers as buttons (plus **None**); the chosen `value` replaces `{env}` in `prompt`, and **None** leaves it empty. The input may also be a GitHub pull request link, which the pull requests' **+** fills in. It opens a new Claude Code session in the repository, in a new Ghostty tab, with `prompt` as its first message, such as a skill: `"/setup-faro-worktree {input}"`. When `prompt` holds `{input}`, the **+** first asks for it under `inputLabel`; only letters, numbers, `.`, `-` and `_` are accepted. Without it, the **+** starts an empty session. |
 | `briefing` | `{ model, language, maxBudgetUsd }`: turns on the written briefing. `model` is any Claude Code model name (default `haiku`), `language` the language it writes in (default English), and `maxBudgetUsd` a hard cap per run (default `0.1`). |
 | `reviewQueue` | `{ repo, reviewer, name, mergedPattern, branchSuffix }`: a reviewer's queue that your pull requests are sent to. A pull request is yours when you wrote it, or, with `branchSuffix` (like `-sender-{login}`), when its branch ends with your GitHub login. A comment by `reviewer` that matches `mergedPattern` counts as merged; any other comment by the reviewer counts as rejected, and the last one becomes the reason. |
 
@@ -96,20 +96,27 @@ claude -p "/daily-briefing" --model haiku --tools "" --no-session-persistence --
 
 ## What It Shows
 
+The console has two pages, **Dashboard** and **Claude Knowledge** (how your Claude Code is set up: memory, instructions, hooks, skills, MCP servers, extensions, and published artifacts); it remembers the one you left open.
+
 - **Activity.** A contribution heatmap that combines GitHub contributions with Claude tool calls.
-- **Briefing.** What you did on your last working day, every pull request you opened, merged, or closed since yesterday, and the tickets in progress. With `briefing` configured, Claude writes it as a short summary (a headline, a few sentences, and what comes next) with pull requests and tickets linked, and the lists move behind **Show details**. See [Written Briefing](#written-briefing).
+- **Briefing.** A greeting with your GitHub photo and bio, then what you did on your last working day, every pull request you opened, merged, or closed since yesterday, and the tickets in progress. With `briefing` configured, Claude writes it as a short summary (a headline, a few sentences, and what comes next) with pull requests and tickets linked, and the lists move behind **Show details**. See [Written Briefing](#written-briefing).
 - **Claude sessions.** Running and recent sessions with their worktree, branch, context use, cost, recap, and linked pull requests, read from `~/.claude/sessions`, `~/.claude/projects`, and the status line's snapshots. In a session:
   - **Click the title to rename it.** Enter or a click outside keeps the name, Escape drops it, and an empty name goes back to the one Claude Code knows. The name shows only in the console: Claude Code keeps the name `/rename` gave it, which the console also reads from the transcript.
   - **Add to favorites** in its menu stars it. Starred sessions show a yellow star and stay in the **Favorites** tab after they leave the recent ones, so you can still resume them; click the star to remove it.
   - **End Session** in its menu, for a running session, stops Claude Code and closes its Ghostty tab, after asking. The conversation stays on disk to resume later, and the tab stays open when something else, such as a dev server, still runs in it.
 - **Claude usage.** The 5-hour and 7-day rate-limit windows, today's tokens and cost, and a 14-day chart.
 - **Jira tickets.** Your open tickets, linked to their worktree, pull request, and running sessions. A ticket without a worktree has a **+** that starts the `newSession` command with its key filled in.
-- **Memory and artifacts.** The Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
+- **Memory and artifacts.** On **Claude Knowledge**: the Claude Code memory notes of the watched repository, and the Artifacts your sessions published.
 - **New sessions.** The **+** beside the session search starts a Claude Code session in a new Ghostty tab (see `newSession`), and **Start session here** in a worktree's menu starts an empty one in that worktree.
-- **Pull requests.** Your open pull requests on GitHub, with CI state, review decision, size, and failing checks.
-- **Skills.** Your skills in `~/.claude/skills` (**Mine**) and the ones the watched repository ships in `.claude/skills` (**Project**), each with its command, arguments, and description. Clicking a command copies it.
-- **Window bar.** The console's name, the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
-- **Worktrees.** Grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console, after asking; `git worktree remove` runs without force, so uncommitted work is never lost.
+- **Pull requests.** Below the worktrees: **Mine**, your open pull requests on GitHub, and **Assigned to me**, others' pull requests assigned to you or asking for your review. Each shows CI state, review decision, size, and failing checks. A pull request of the watched repository (or a fork of it) without a worktree has a **+** that starts the `newSession` command with its link filled in.
+- **Claude setup.** On **Claude Knowledge**:
+  - **Instructions:** the `CLAUDE.md` files and rules, yours and the repository's, each with its first paragraph; click one to read it all.
+  - **Hooks:** the hooks in your settings and the repository's, with their event, matcher, and command.
+  - **MCP servers:** every server Claude Code would load from the repository, with the health `claude mcp list` reports (connected, needs authentication, failed, and why). It connects to each server, so it runs every ten minutes, or on **Check again**.
+  - **Extensions:** marketplace and local plugins, slash commands, and subagents.
+- **Skills.** On **Claude Knowledge**: your skills in `~/.claude/skills` (**Mine**) and the ones the watched repository ships in `.claude/skills` (**Project**), each with its command, arguments, description, and how often you used it in the last 40 days (by typing it or by Claude calling it); sort by name or by use. Clicking a command copies it.
+- **Window bar.** The console's name, what the worktrees take on disk (measured in the background every half hour at the lowest priority, with the largest ones and the disk's free space in its tooltip, red when the disk is almost full), the laptop's battery (read from `/sys/class/power_supply`, hidden without one), the time, and buttons that maximize or restore the console's app window and close it (through `wmctrl`; in a plain browser tab, maximize switches to full screen).
+- **Worktrees.** The five most recently touched, with **Show more** for the rest, grouped as active, idle, or dormant, with a 14-day activity strip from each worktree's reflog, the dev server port, and its environment. Dormant worktrees can be removed from the console, after asking; `git worktree remove` runs without force first, so uncommitted work is never lost by accident. When git refuses because of modified or untracked files, **Force delete** removes it anyway, after a warning that those files are lost; the branch and its commits stay.
 
 ## What It Stores
 
@@ -121,6 +128,7 @@ Everything the console keeps stays on this machine, outside the repository:
 | `~/.config/claude-console/env` (mode 600) | The Jira credentials, when Jira is on. |
 | `~/.config/claude-console/favorites.json` (mode 600) | The starred sessions: each one's id, name, branch, and folders, enough to list and resume it later. |
 | `~/.config/claude-console/names.json` (mode 600) | The names you gave sessions in the console, by session id. |
+| `~/.config/claude-console/disk.json` (mode 600) | The last measure of the worktrees' sizes, so a restart shows it without measuring again. |
 | `~/.config/claude-console/briefing/` (mode 600) | The written briefings of the last 14 days, one file per day. |
 | The page's browser storage | View preferences: the theme, the selected sessions tab, the Jira view, and the activity tab. |
 | `~/.local/share/claude-console/chrome` | The browser profile of the console's app window. |

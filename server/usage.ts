@@ -11,6 +11,7 @@ import {
   worktreeNameOf,
   parseArtifactCalls,
   parseCustomTitle,
+  parseSkillUses,
   parseSessionRow,
   parsePrLink,
   parseRecapLine,
@@ -33,6 +34,8 @@ const recaps = new Map<string, { at: number; text: string }>()
 const prLinks = new Map<string, string[]>()
 const artifactCalls = new Map<string, ArtifactCall>()
 const customTitles = new Map<string, string>()
+const skillUses = new Map<string, { count: number; lastAt: number }>()
+const countedSkillUses = new Set<string>()
 
 type SessionDay = { firstAt: number; lastAt: number; cwd: string; branch: string; responses: number }
 
@@ -117,6 +120,10 @@ const SCAN_DAYS = 40
 // The automatic title of a session, once a scan has read its transcript.
 export const titleOf = (sessionId: string) => titles.get(sessionId) ?? ''
 
+// How often each skill was used in the scanned transcripts, by name, whether
+// Claude called it or the person typed its command.
+export const skillUsageOf = (name: string) => skillUses.get(name) ?? { count: 0, lastAt: 0 }
+
 // The name the session was given with /rename, as its transcript records it.
 export const renamedOf = (sessionId: string) => customTitles.get(sessionId) ?? ''
 
@@ -165,6 +172,16 @@ const consume = (text: string, oldest: number) => {
 
       if (row.cwd) day.cwd = row.cwd
       if (row.branch && row.branch !== 'HEAD') day.branch = row.branch
+    }
+
+    for (const use of parseSkillUses(line)) {
+      if (countedSkillUses.has(use.id)) continue
+
+      countedSkillUses.add(use.id)
+
+      const seen = skillUses.get(use.name) ?? { count: 0, lastAt: 0 }
+
+      skillUses.set(use.name, { count: seen.count + 1, lastAt: Math.max(seen.lastAt, use.at) })
     }
 
     const custom = parseCustomTitle(line)

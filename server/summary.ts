@@ -29,7 +29,7 @@ export const currentSummary = () => summary
 const isExecutable = (path: string) => access(path, constants.X_OK).then(() => true, () => false)
 
 // The service's PATH is short, and Claude Code usually lives in ~/.local/bin.
-const findClaude = async () => {
+export const findClaude = async () => {
   const dirs = [
     ...(process.env.PATH ?? '').split(delimiter),
     join(homedir(), '.local', 'bin'),

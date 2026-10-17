@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import type { Skill } from '../shared/types'
 import { parseSkill } from './pure'
+import { skillUsageOf } from './usage'
 
 // The skills in one folder: each subfolder holding a SKILL.md, following
 // symbolic links. Anything else, such as a folder of synced skills, is skipped.
@@ -24,6 +25,8 @@ const skillsIn = async (dir: string, source: Skill['source']): Promise<Skill[]> 
           source,
           path,
           updatedAt: info.mtimeMs,
+          uses: skillUsageOf(skill.name || entry).count,
+          lastUsedAt: skillUsageOf(skill.name || entry).lastAt,
         } satisfies Skill
       } catch {
         return null
