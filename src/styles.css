@@ -12,6 +12,8 @@
   --fog: #8c98a4;
   --strip-0: #dbe1e7;
   --bar: #2f6fb5;
+  --disk-worktrees: #2f6fb5;
+  --disk-other: #838f9a;
   --claude: #c15f3c;
   --merged: #8250df;
   --shadow: rgba(10, 16, 22, 0.18);
@@ -40,6 +42,8 @@
     --fog: #5e6b77;
     --strip-0: #212b35;
     --bar: #4f8fd8;
+    --disk-worktrees: #4f8fd8;
+    --disk-other: #5e6b77;
     --claude: #e08a6a;
     --merged: #a371f7;
     --shadow: rgba(0, 0, 0, 0.55);
@@ -66,6 +70,8 @@
   --fog: #5e6b77;
   --strip-0: #212b35;
   --bar: #4f8fd8;
+  --disk-worktrees: #4f8fd8;
+  --disk-other: #5e6b77;
   --claude: #e08a6a;
   --merged: #a371f7;
   --shadow: rgba(0, 0, 0, 0.55);
@@ -234,6 +240,24 @@ button:disabled {
 
 .win-disk svg {
   display: block;
+}
+
+.disk-pie-free {
+  fill: var(--strip-0);
+}
+
+.disk-pie-other {
+  fill: var(--disk-other);
+}
+
+.disk-pie-worktrees {
+  fill: var(--disk-worktrees);
+}
+
+.disk-pie path {
+  /* A surface-colored edge keeps the slices apart. */
+  stroke: var(--surface);
+  stroke-width: 0.8;
 }
 
 .win-disk[data-level='low'] {

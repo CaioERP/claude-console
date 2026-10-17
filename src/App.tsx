@@ -156,6 +156,42 @@ const BatteryMeter = ({ battery }: { battery: Battery }) => {
   )
 }
 
+const percent = (part: number, whole: number) => {
+  const share = whole > 0 ? (part / whole) * 100 : 0
+
+  return `${share < 10 ? share.toFixed(1) : Math.round(share)}%`
+}
+
+// A slice of a 16px pie from one share of the circle to another, starting at
+// twelve o'clock and going clockwise.
+const pieSlice = (from: number, to: number) => {
+  const point = (share: number) => {
+    const angle = share * 2 * Math.PI - Math.PI / 2
+
+    return `${(8 + 7 * Math.cos(angle)).toFixed(2)} ${(8 + 7 * Math.sin(angle)).toFixed(2)}`
+  }
+
+  if (to - from >= 0.9999) return 'M8 1a7 7 0 1 1 0 14a7 7 0 1 1 0-14Z'
+
+  return `M8 8L${point(from)}A7 7 0 ${to - from > 0.5 ? 1 : 0} 1 ${point(to)}Z`
+}
+
+// The disk as a mini pie: the worktrees' share in the accent color, the rest
+// of what is used in neutral gray, and the free space as the empty track.
+const DiskPie = ({ usage }: { usage: DiskUsage }) => {
+  const size = usage.disk?.size ?? 0
+  const worktrees = size ? Math.min(1, usage.totalBytes / size) : 0
+  const used = size ? Math.min(1, Math.max(worktrees, usage.disk!.used / size)) : 0
+
+  return (
+    <svg className="disk-pie" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle className="disk-pie-free" cx="8" cy="8" r="7" />
+      {used > worktrees && <path className="disk-pie-other" d={pieSlice(worktrees, used)} />}
+      {worktrees > 0 && <path className="disk-pie-worktrees" d={pieSlice(0, worktrees)} />}
+    </svg>
+  )
+}
+
 const worktreeName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 // What the worktrees take on disk, with the largest ones and the disk's free
@@ -173,18 +209,19 @@ const WorktreeDisk = ({ usage }: { usage: DiskUsage }) => {
       : 'Measuring the worktrees…',
     largest && `Largest:\n${largest}`,
     usage.disk &&
-      `Disk: ${Math.round((usage.disk.used / usage.disk.size) * 100)}% used, ${bytesLabel(usage.disk.free)} free of ${bytesLabel(usage.disk.size)}`,
+      [
+        `Disk: ${bytesLabel(usage.disk.size)}`,
+        `worktrees: ${percent(usage.totalBytes, usage.disk.size)}`,
+        `everything else: ${percent(Math.max(0, usage.disk.used - usage.totalBytes), usage.disk.size)}`,
+        `free: ${percent(usage.disk.free, usage.disk.size)} (${bytesLabel(usage.disk.free)})`,
+      ].join('\n'),
   ]
     .filter(Boolean)
     .join('\n\n')
 
   return (
     <span className="win-disk" data-level={level} data-tooltip={tooltip} tabIndex={0}>
-      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-        <rect x="1.5" y="3" width="13" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M1.5 9.5h13" stroke="currentColor" strokeWidth="1.3" />
-        <circle cx="11.6" cy="11.3" r="0.8" fill="currentColor" />
-      </svg>
+      <DiskPie usage={usage} />
       <span>{usage.scannedAt ? bytesLabel(usage.totalBytes) : 'Measuring…'}</span>
       <span className="visually-hidden"> in worktrees</span>
     </span>
