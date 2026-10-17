@@ -11,6 +11,9 @@ import { collectProfile } from './profile'
 import { CONFIG_PATH, config, featuresOf } from './config'
 import { collectJira } from './jira'
 import { collectMemory } from './memory'
+import { collectSkills } from './skills'
+import { briefingInput } from './briefing-input'
+import { currentSummary, ensureSummary } from './summary'
 import { collectReviewQueue } from './queue'
 import { briefingOf, collectUsage, lastSeenOf, prUrlsOf, recapOf, renamedOf, responsesOf, titleOf } from './usage'
 import { readNames, setName } from './names'
@@ -491,9 +494,11 @@ const state: Snapshot = {
   names: {},
   contributions: null,
   memory: [],
+  skills: [],
   artifacts: [],
   profile: null,
   briefing: null,
+  summary: { status: 'off', text: '', generatedAt: 0, model: '', error: '' },
   recentPrs: [],
   worktreesAt: 0,
   prsAt: 0,
@@ -549,6 +554,13 @@ const refreshUsage = () =>
       } catch (error) {
         state.errors.profile = error instanceof Error ? error.message : String(error)
       }
+    }
+
+    try {
+      state.skills = await collectSkills(REPO)
+      delete state.errors.skills
+    } catch (error) {
+      state.errors.skills = error instanceof Error ? error.message : String(error)
     }
 
     try {
@@ -652,6 +664,8 @@ export const getSnapshot = async (options: { force?: boolean } = {}): Promise<Sn
     if (options.force) await job
   }
 
+  refreshSummary()
+
   const [favorites, names] = await Promise.all([readFavorites(), readNames()])
   const named = (session: Session): Session =>
     names[session.id] ? { ...session, name: names[session.id]!, claudeName: session.name, isAutoTitle: false } : session
@@ -667,8 +681,19 @@ export const getSnapshot = async (options: { force?: boolean } = {}): Promise<Sn
     favorites: favorites.map(f => f.id),
     favoriteSessions: favoriteSessionsOf(favorites, state.sessions).map(named),
     names,
+    summary: currentSummary(),
     generatedAt: Date.now(),
   }
+}
+
+// Writes or refreshes the briefing's summary once the data it is made of has
+// been read at least once: the transcripts, the pull requests and, when on, Jira.
+export const refreshSummary = (options: { force?: boolean } = {}) => {
+  if (!config.briefing) return ensureSummary(briefingInput(state, '', Date.now()), null)
+
+  if (!usageAt || !state.prsAt || (config.jira && !state.jiraAt)) return
+
+  ensureSummary(briefingInput(state, config.briefing.language, Date.now()), config.briefing, options)
 }
 
 // Gives a session a name in the console, or takes it away when name is empty.

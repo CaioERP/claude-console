@@ -40,6 +40,11 @@
     "inputLabel": "Ticket or name",
     "description": "Creates an osb-faro-web worktree off upstream/master, starts its webpack dev server, and opens a Claude session in it that asks what the worktree is for."
   },
+  "briefing": {
+    "model": "haiku",
+    "language": "English",
+    "maxBudgetUsd": 0.1
+  },
   "reviewQueue": {
     "repo": "brianchandotcom/liferay-portal",
     "reviewer": "brianchandotcom",

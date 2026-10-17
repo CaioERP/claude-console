@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { PullRequest, RecentPr, Session } from '../shared/types'
-import { blend, briefingPrs, elapsedLabel, greeting, memoryKey, memoryLinks, prBelongsTo, mentions, orderStatuses, quartileScale, resumeCommand, sessionMatches, spinnerFrame, verbFor, worktreeOf } from './format'
+import { blend, briefingPrs, summaryParagraphs, elapsedLabel, greeting, memoryKey, memoryLinks, prBelongsTo, mentions, orderStatuses, quartileScale, resumeCommand, sessionMatches, spinnerFrame, verbFor, worktreeOf } from './format'
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: 's1',
@@ -215,5 +215,34 @@ describe('briefingPrs', () => {
 
     expect(prs).toHaveLength(1)
     expect(prs[0]).toMatchObject({ event: 'opened', ci: 'failing' })
+  })
+})
+
+describe('summaryParagraphs', () => {
+  const prs = new Map([[4205, 'https://github.com/o/r/pull/4205']])
+  const tickets = new Map([['ABC-1', 'https://example.atlassian.net/browse/ABC-1']])
+
+  it('splits paragraphs and links only known pull requests and tickets', () => {
+    expect(summaryParagraphs('Shipped #4205 for ABC-1, not #9 or XYZ-2.\n\n**Next:** review', prs, tickets)).toEqual([
+      [
+        { kind: 'text', text: 'Shipped ' },
+        { kind: 'link', text: '#4205', url: 'https://github.com/o/r/pull/4205' },
+        { kind: 'text', text: ' for ' },
+        { kind: 'link', text: 'ABC-1', url: 'https://example.atlassian.net/browse/ABC-1' },
+        { kind: 'text', text: ', not ' },
+        { kind: 'text', text: '#9' },
+        { kind: 'text', text: ' or ' },
+        { kind: 'text', text: 'XYZ-2' },
+        { kind: 'text', text: '.' },
+      ],
+      [{ kind: 'bold', children: [{ kind: 'text', text: 'Next:' }] }, { kind: 'text', text: ' review' }],
+    ])
+  })
+
+  it('links inside bold and never treats markup as anything but text', () => {
+    expect(summaryParagraphs('**ABC-1 moved**', prs, tickets)[0]).toEqual([
+      { kind: 'bold', children: [{ kind: 'link', text: 'ABC-1', url: 'https://example.atlassian.net/browse/ABC-1' }, { kind: 'text', text: ' moved' }] },
+    ])
+    expect(summaryParagraphs('<img src=x onerror=alert(1)>', prs, tickets)).toEqual([[{ kind: 'text', text: '<img src=x onerror=alert(1)>' }]])
   })
 })

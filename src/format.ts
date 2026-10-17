@@ -260,3 +260,38 @@ export const briefingPrs = (
 
   return [...byUrl.values()].sort((a, b) => b.at - a.at)
 }
+
+export type SummaryToken =
+  | { kind: 'text'; text: string }
+  | { kind: 'link'; text: string; url: string }
+  | { kind: 'bold'; children: SummaryToken[] }
+
+const SUMMARY_TOKEN = /(\*\*[^*\n]+\*\*|#\d+\b|\b[A-Z][A-Z0-9]+-\d+\b)/
+
+// The written summary as paragraphs of plain text, bold, and links. Only
+// "#1234" pull requests and ticket keys the dashboard knows become links, so
+// nothing the model writes is ever rendered as markup.
+export const summaryParagraphs = (
+  text: string,
+  prUrls: ReadonlyMap<number, string>,
+  ticketUrls: ReadonlyMap<string, string>,
+): SummaryToken[][] => {
+  const tokenize = (part: string, allowBold: boolean): SummaryToken[] =>
+    part
+      .split(SUMMARY_TOKEN)
+      .filter(Boolean)
+      .map((piece): SummaryToken => {
+        if (allowBold && /^\*\*[^*\n]+\*\*$/.test(piece)) return { kind: 'bold', children: tokenize(piece.slice(2, -2), false) }
+
+        const pr = /^#(\d+)$/.exec(piece)
+        const url = pr ? prUrls.get(Number(pr[1])) : ticketUrls.get(piece)
+
+        return url ? { kind: 'link', text: piece, url } : { kind: 'text', text: piece }
+      })
+
+  return text
+    .split(/\n\s*\n/)
+    .map(paragraph => paragraph.replace(/\s*\n\s*/g, ' ').trim())
+    .filter(Boolean)
+    .map(paragraph => tokenize(paragraph, true))
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type {
+  Skill,
   Battery,
   Activity,
   ReviewQueue,
@@ -40,6 +41,8 @@ import {
   verbFor,
   worktreeOf,
   briefingPrs,
+  summaryParagraphs,
+  type SummaryToken,
   type BriefPr,
   type PrEvent,
 } from './format'
@@ -2728,6 +2731,151 @@ const readMemoryView = (): 'list' | 'graph' => {
   }
 }
 
+type SkillTab = 'personal' | 'project'
+
+const SKILL_TAB_KEY = 'claude-console:skills-tab'
+const SKILL_PAGE = 8
+
+const readSkillTab = (): SkillTab => {
+  try {
+    return localStorage.getItem(SKILL_TAB_KEY) === 'project' ? 'project' : 'personal'
+  } catch {
+    return 'personal'
+  }
+}
+
+const SkillItem = ({ skill }: { skill: Skill }) => {
+  const [isOpen, setIsOpen] = useState(false)
+  const [note, setNote] = useState('')
+  const command = `/${skill.name}`
+
+  useEffect(() => {
+    if (!note) return
+
+    const timer = setTimeout(() => setNote(''), 2_000)
+
+    return () => clearTimeout(timer)
+  }, [note])
+
+  return (
+    <li className="skill" data-open={isOpen}>
+      <span className="skill-head">
+        <button
+          type="button"
+          className="skill-name"
+          title={`Copy ${command}`}
+          onClick={async () => setNote((await copy(command)) ? 'Copied' : 'Copy failed')}
+        >
+          {command}
+        </button>
+        {skill.argumentHint && <code className="skill-args">{skill.argumentHint}</code>}
+        {note && (
+          <span className="skill-note" role="status">
+            {note}
+          </span>
+        )}
+      </span>
+      {skill.description && (
+        <button
+          type="button"
+          className="skill-description"
+          aria-expanded={isOpen}
+          title={isOpen ? 'Show less' : 'Show the whole description'}
+          onClick={() => setIsOpen(v => !v)}
+        >
+          {skill.description}
+        </button>
+      )}
+    </li>
+  )
+}
+
+// Your skills, and the ones the watched repository ships: each one's command,
+// arguments and description. Clicking a command copies it.
+const SkillsCard = ({ skills }: { skills: Skill[] }) => {
+  const [tab, setTab] = useState<SkillTab>(readSkillTab)
+  const [query, setQuery] = useState('')
+  const [showAll, setShowAll] = useState(false)
+  const counts = { personal: skills.filter(s => s.source === 'personal').length, project: skills.filter(s => s.source === 'project').length }
+  const q = query.trim().toLowerCase()
+  const matching = skills
+    .filter(s => s.source === tab)
+    .filter(s => !q || `${s.name} ${s.description} ${s.argumentHint}`.toLowerCase().includes(q))
+  const shown = showAll || q ? matching : matching.slice(0, SKILL_PAGE)
+
+  const choose = (next: SkillTab) => {
+    setTab(next)
+    setShowAll(false)
+
+    try {
+      localStorage.setItem(SKILL_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }
+
+  return (
+    <section className="panel skills" aria-labelledby="skills-title">
+      <header className="panel-head">
+        <h2 id="skills-title">Skills</h2>
+        <div className="filters" role="tablist" aria-label="Skills">
+          {(['personal', 'project'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              aria-controls="skills-tabpanel"
+              onClick={() => choose(option)}
+            >
+              {option === 'personal' ? 'Mine' : 'Project'}
+              <span className="count"> {counts[option]}</span>
+            </button>
+          ))}
+        </div>
+        <input
+          className="search"
+          type="search"
+          placeholder="Search"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          aria-label="Filter skills by name or description"
+        />
+      </header>
+      <div id="skills-tabpanel" role="tabpanel">
+        {counts[tab] === 0 ? (
+          <p className="empty">
+            {tab === 'personal' ? (
+              <>
+                No skill in <code>~/.claude/skills</code> yet.
+              </>
+            ) : (
+              <>
+                The repository has no skill in <code>.claude/skills</code>.
+              </>
+            )}
+          </p>
+        ) : matching.length === 0 ? (
+          <p className="empty">No skill matches that filter.</p>
+        ) : (
+          <>
+            <ul className="skill-list">
+              {shown.map(skill => (
+                <SkillItem key={skill.path} skill={skill} />
+              ))}
+            </ul>
+            {!q && matching.length > SKILL_PAGE && (
+              <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+                {showAll ? 'Show fewer' : `Show all ${matching.length} skills`}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
 const MemoryCard = ({ notes, now }: { notes: MemoryNote[]; now: number }) => {
   const [view, setView] = useState<'list' | 'graph'>(readMemoryView)
   const [type, setType] = useState<string>('all')
@@ -3057,6 +3205,122 @@ const prLead = (prs: BriefPr[]) => {
 
 // The day at a glance, across the whole page: what the last working day held,
 // what is open now, and what is in development.
+// Links for the ticket keys in a summary: those of your tickets, and any other
+// key of the same Jira projects, built from your tickets' address. Keys of
+// other projects, and look-alikes such as UTF-8, stay plain text.
+const ticketLinks = (issues: JiraIssue[], text: string) => {
+  const links = new Map(issues.map(issue => [issue.key, issue.url] as const))
+  const browse = new Map(
+    issues.map(issue => [issue.key.split('-')[0]!, issue.url.slice(0, issue.url.length - issue.key.length)] as const),
+  )
+
+  for (const key of text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []) {
+    const base = browse.get(key.split('-')[0]!)
+
+    if (base && !links.has(key)) links.set(key, `${base}${key}`)
+  }
+
+  return links
+}
+
+const SummaryText = ({ tokens }: { tokens: SummaryToken[] }) => (
+  <>
+    {tokens.map((token, at) =>
+      token.kind === 'bold' ? (
+        <strong key={at}>
+          <SummaryText tokens={token.children} />
+        </strong>
+      ) : token.kind === 'link' ? (
+        <a key={at} href={token.url}>
+          {token.text}
+        </a>
+      ) : (
+        <span key={at}>{token.text}</span>
+      ),
+    )}
+  </>
+)
+
+const regenerateSummary = () =>
+  fetch('/api/briefing/regenerate', { method: 'POST', headers: { 'X-Claude-Console': '1' } })
+    .catch(() => null)
+    .then(() => window.dispatchEvent(new Event('claude-console:refresh')))
+
+// The briefing written by Claude: a headline, a short account of the last
+// working day, and what comes next, with pull requests and tickets linked.
+const BriefingSummaryView = ({
+  summary,
+  prUrls,
+  ticketUrls,
+  now,
+}: {
+  summary: Snapshot['summary']
+  prUrls: ReadonlyMap<number, string>
+  ticketUrls: ReadonlyMap<string, string>
+  now: number
+}) => {
+  const [isAsking, setIsAsking] = useState(false)
+  const isWriting = summary.status === 'writing' || isAsking
+  const paragraphs = summaryParagraphs(summary.text, prUrls, ticketUrls)
+
+  useEffect(() => {
+    if (summary.status !== 'writing') setIsAsking(false)
+  }, [summary.status, summary.generatedAt])
+
+  return (
+    <div className="brief-summary" aria-busy={isWriting || undefined}>
+      {paragraphs.length > 0 ? (
+        <div className="brief-summary-text">
+          {paragraphs.map((tokens, at) =>
+            at === 0 ? (
+              <p key={at} className="brief-summary-headline">
+                <SummaryText tokens={tokens} />
+              </p>
+            ) : (
+              <p key={at}>
+                <SummaryText tokens={tokens} />
+              </p>
+            ),
+          )}
+        </div>
+      ) : isWriting ? null : (
+        <p className="empty">The summary could not be written{summary.error ? `: ${summary.error}` : '.'}</p>
+      )}
+      <p className="brief-summary-meta" role="status">
+        {isWriting ? (
+          <>
+            <span className="sync" data-busy="true" aria-hidden />
+            Claude is writing your summary…
+          </>
+        ) : (
+          <>
+            {summary.generatedAt > 0 && (
+              <span title={new Date(summary.generatedAt).toLocaleString()}>
+                Written by Claude {summary.model && `(${summary.model})`} {ago(summary.generatedAt, now)}
+              </span>
+            )}
+            {summary.error && paragraphs.length > 0 && (
+              <span className="brief-summary-error" title={summary.error}>
+                Last update failed
+              </span>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setIsAsking(true)
+                void regenerateSummary()
+              }}
+            >
+              Regenerate
+            </button>
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
+
 const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) => {
   const [isOpen, setIsOpen] = useState(false)
   const briefing = snapshot.briefing
@@ -3068,6 +3332,12 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
   )
   const developing = snapshot.jira.filter(issue => issue.statusCategory === 'indeterminate')
   const firstName = snapshot.profile?.name.split(' ')[0] ?? ''
+  const summary = snapshot.summary
+  const hasSummary = summary.status !== 'off'
+  const [showDetails, setShowDetails] = useState(false)
+  const prUrls = new Map([...snapshot.prs, ...prs].map(pr => [pr.number, pr.url] as const))
+  const ticketUrls = ticketLinks(snapshot.jira, summary.text)
+  const isGridShown = !hasSummary || showDetails || summary.status === 'error'
 
   return (
     <section className="panel briefing" data-open={isOpen} aria-labelledby="briefing-title">
@@ -3090,7 +3360,20 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
           {briefing && briefing.todaySessions > 0 && <>, {plural(briefing.todaySessions, 'session')} so far today</>}
         </span>
       </header>
-      <div className="brief-grid" id="briefing-body" hidden={!isOpen} data-columns={snapshot.features.jira ? 3 : 2}>
+      <div id="briefing-body" hidden={!isOpen}>
+      {hasSummary && <BriefingSummaryView summary={summary} prUrls={prUrls} ticketUrls={ticketUrls} now={now} />}
+      {hasSummary && summary.status !== 'error' && (
+        <button
+          type="button"
+          className="ghost more brief-details-toggle"
+          aria-expanded={showDetails}
+          aria-controls="briefing-details"
+          onClick={() => setShowDetails(v => !v)}
+        >
+          {showDetails ? 'Hide details' : 'Show details: sessions, pull requests and tickets'}
+        </button>
+      )}
+      <div className="brief-grid" id="briefing-details" hidden={!isGridShown} data-columns={snapshot.features.jira ? 3 : 2}>
         {briefing ? <BriefingSessions briefing={briefing} /> : <p className="empty">Reading yesterday's sessions…</p>}
         <div className="brief-col">
           <h2 className="brief-title">Pull requests</h2>
@@ -3140,6 +3423,7 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
             )}
           </div>
         )}
+      </div>
       </div>
     </section>
   )
@@ -3426,6 +3710,7 @@ export const App = () => {
     snapshot.errors.queue && `The review queue could not be read: ${snapshot.errors.queue}`,
     snapshot.errors.contributions && `Activity could not be read: ${snapshot.errors.contributions}`,
     snapshot.errors.memory && `Memory could not be read: ${snapshot.errors.memory}`,
+    snapshot.errors.skills && `Skills could not be read: ${snapshot.errors.skills}`,
     snapshot.errors.artifacts && `Artifacts could not be read: ${snapshot.errors.artifacts}`,
   ].filter(Boolean)
 
@@ -3485,6 +3770,7 @@ export const App = () => {
                 repo={snapshot.repo}
               />
             )}
+            <SkillsCard skills={snapshot.skills} />
             <MemoryCard notes={snapshot.memory} now={now} />
           </div>
           <div className="column">

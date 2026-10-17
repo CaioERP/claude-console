@@ -603,6 +603,60 @@ h1 {
   font-size: 0.9rem;
 }
 
+.brief-summary {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 62rem;
+  margin-top: 1.1rem;
+}
+
+.brief-summary-text p {
+  margin: 0 0 0.55rem;
+  color: var(--ink-2);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.brief-summary-text .brief-summary-headline {
+  color: var(--ink);
+  font-size: 1.12rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.brief-summary-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.brief-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 0.8rem;
+}
+
+.brief-summary-meta .ghost {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.brief-summary-error {
+  color: var(--amber);
+}
+
+.brief-details-toggle {
+  justify-self: start;
+  margin-top: 0.4rem;
+}
+
+.brief-grid[hidden] {
+  display: none;
+}
+
 .brief-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -2104,6 +2158,73 @@ h2 {
 }
 
 /* Memory */
+
+/* Skills */
+
+.skill-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skill {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.skill:first-child {
+  border-top: 0;
+}
+
+.skill-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+
+.skill-name {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--harbor);
+  font: 600 0.88rem var(--mono);
+}
+
+.skill-name:hover {
+  text-decoration: underline;
+}
+
+.skill-args {
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+.skill-note {
+  color: var(--moss);
+  font-size: 0.78rem;
+}
+
+.skill-description {
+  display: -webkit-box;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  text-align: left;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.skill[data-open='true'] .skill-description {
+  -webkit-line-clamp: unset;
+}
 
 .memory-list {
   display: grid;

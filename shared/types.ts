@@ -158,6 +158,15 @@ export type ContributionDay = { date: string; github: number; claude: number }
 
 export type Contributions = { days: ContributionDay[]; githubAt: number }
 
+export type Skill = {
+  name: string
+  description: string
+  argumentHint: string
+  source: 'personal' | 'project'
+  path: string
+  updatedAt: number
+}
+
 export type MemoryNote = {
   file: string
   name: string
@@ -199,6 +208,17 @@ export type DaySession = {
   recap: string
 }
 
+// The written summary of the briefing: off when not configured, writing while
+// Claude works on it, ready once written, error when the first try failed.
+export type BriefingSummary = {
+  status: 'off' | 'writing' | 'ready' | 'error'
+  text: string
+  generatedAt: number
+  model: string
+  // Why the last run failed, even while an older summary still shows.
+  error: string
+}
+
 export type Briefing = {
   day: string
   isYesterday: boolean
@@ -237,11 +257,13 @@ export type Snapshot = {
   names: Record<string, string>
   contributions: Contributions | null
   memory: MemoryNote[]
+  skills: Skill[]
   artifacts: PublishedArtifact[]
   profile: Profile | null
   briefing: Briefing | null
+  summary: BriefingSummary
   recentPrs: RecentPr[]
   worktreesAt: number
   prsAt: number
-  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; artifacts?: string; profile?: string }
+  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; skills?: string; artifacts?: string; profile?: string }
 }

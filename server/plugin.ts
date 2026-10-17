@@ -4,7 +4,7 @@ import { extname } from 'node:path'
 import type { Plugin } from 'vite'
 
 import { config, newSessionPrompt } from './config'
-import { REPO, getSnapshot, isWorktreePath, renameSession, setFavorite, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
+import { REPO, getSnapshot, isWorktreePath, refreshSummary, renameSession, setFavorite, removeDormantWorktree, runningSessions, sessionCost, workingAgents } from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
 import { endSession } from './end'
 import { readBattery } from './system'
@@ -175,6 +175,19 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
       res.setHeader('Content-Type', 'application/json')
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
     }
+    return
+  }
+
+  if (url.pathname === '/api/briefing/regenerate') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    refreshSummary({ force: true })
+    res.statusCode = 202
+    res.end()
     return
   }
 

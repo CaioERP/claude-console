@@ -459,6 +459,34 @@ export const parseMemoryNote = (text: string) => {
   return { name: field('name'), description: field('description'), type: field('type') || 'note', body }
 }
 
+// The frontmatter fields of a SKILL.md: plain, quoted, or folded over several
+// indented lines (YAML's ">" and "|").
+export const parseSkill = (text: string) => {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
+  const lines = front.split(/\r?\n/)
+  const field = (key: string) => {
+    const at = lines.findIndex(line => new RegExp(`^${key}:`).test(line))
+
+    if (at < 0) return ''
+
+    const first = lines[at]!.slice(key.length + 1).trim()
+    const rest: string[] = []
+
+    for (const line of lines.slice(at + 1)) {
+      if (!/^\s+\S/.test(line)) break
+
+      rest.push(line.trim())
+    }
+
+    const value = /^[>|][-+]?$/.test(first) ? rest.join(' ') : [first, ...rest].join(' ')
+    const quoted = /^(["'])([\s\S]*)\1$/.exec(value.trim())
+
+    return (quoted ? quoted[2]!.replace(/\\"/g, '"') : value).replace(/\s+/g, ' ').trim()
+  }
+
+  return { name: field('name'), description: field('description'), argumentHint: field('argument-hint') }
+}
+
 // The MEMORY.md index: each line's title and one-line hook, by file name.
 export const parseMemoryIndex = (text: string) => {
   const entries = new Map<string, { title: string; hook: string }>()

@@ -28,6 +28,9 @@ export type ConsoleConfig = {
   // repository whose first message is `prompt`, with {input} replaced by what
   // you type (a ticket or a name). Without it, the "+" starts an empty session.
   newSession: { prompt: string; inputLabel: string; description: string } | null
+  // The written summary at the top of the briefing, by Claude Code with the
+  // daily-briefing skill. Off without this section, since each run uses your plan.
+  briefing: { model: string; language: string; maxBudgetUsd: number } | null
   // A reviewer's queue that your pull requests are forwarded to, read with gh.
   reviewQueue: {
     // The repository the forwarded pull requests are opened in.
@@ -51,6 +54,7 @@ const DEFAULTS: ConsoleConfig = {
   devEnv: null,
   jira: null,
   newSession: null,
+  briefing: null,
   reviewQueue: null,
 }
 
@@ -92,6 +96,13 @@ export const resolveConfig = (values: Partial<ConsoleConfig>, env: NodeJS.Proces
           prompt: values.newSession.prompt,
           inputLabel: values.newSession.inputLabel || 'Name',
           description: values.newSession.description || '',
+        }
+      : null,
+    briefing: values.briefing
+      ? {
+          model: values.briefing.model || 'haiku',
+          language: values.briefing.language || 'English',
+          maxBudgetUsd: values.briefing.maxBudgetUsd > 0 ? values.briefing.maxBudgetUsd : 0.1,
         }
       : null,
     reviewQueue: values.reviewQueue?.repo && values.reviewQueue.reviewer
