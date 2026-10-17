@@ -22,6 +22,10 @@ A local dashboard (Vite + React + TypeScript) whose API is a Vite plugin in `ser
 - In `ensureSummary`, the running flag is cleared in `.finally()` on the promise, never inside the async body: a body that returns before its first await would clear the flag before it is set, and no run would ever start again.
 - Every real run costs the user's plan. When testing, prefer the unit tests and one regenerate, not loops.
 
+## Launching Desktop Programs
+
+Start anything that outlives a request (Ghostty, a browser) through `launchApp` in `server/open.ts`, which runs it in a `systemd-run --user --scope` of its own. Spawned straight from the service, a Ghostty or browser that was not running yet joins the service's cgroup, and `systemctl --user restart claude-console.service` kills it with every tab, Claude session, and dev server inside.
+
 ## Testing Actions
 
 Actions that open Ghostty, end sessions, delete worktrees, or start sessions have real effects. Check them headlessly with Playwright and intercept their routes (`/api/terminal`, `/api/session/*`, `/api/worktree/remove`, `/api/window/*`); test `desktop/ghostty-tab` with `DRY_RUN=1`.
