@@ -1715,6 +1715,17 @@ h2 {
   flex-shrink: 0;
 }
 
+.remote-badge {
+  color: var(--harbor);
+  font: 600 0.78rem var(--mono);
+  text-decoration: none;
+}
+
+.remote-badge:hover,
+.remote-badge:focus-visible {
+  color: var(--ink);
+}
+
 .favorite-star {
   display: inline-grid;
   place-items: center;

@@ -28,6 +28,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   isRunning: true,
   runStatus: 'idle',
   runSince: 0,
+  remoteUrl: '',
   ...over,
 })
 

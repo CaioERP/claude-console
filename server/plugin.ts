@@ -48,8 +48,8 @@ const handleTerminal = async (req: IncomingMessage, res: ServerResponse) => {
   }
 
   try {
-    const { dir, session } = JSON.parse(await readBody(req)) as { dir?: string; session?: string }
-    await openTerminal(String(dir ?? ''), session ? String(session) : '')
+    const { dir, session, remote } = JSON.parse(await readBody(req)) as { dir?: string; session?: string; remote?: boolean }
+    await openTerminal(String(dir ?? ''), session ? String(session) : '', remote === true)
     res.statusCode = 204
     res.end()
   } catch (error) {
@@ -371,6 +371,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
           since: r.since,
           agents: await workingAgents(id, r.cwd).catch(() => 0),
           cost: await sessionCost(id),
+          remoteUrl: r.remoteUrl,
         },
       ]),
     )

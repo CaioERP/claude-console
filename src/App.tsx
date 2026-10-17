@@ -1528,6 +1528,45 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
 
   actions.push(copyAction('Copy session id', session.id))
 
+  if (session.remoteUrl) {
+    actions.push({
+      label: 'Open in Remote Control',
+      run: async () => ((await openUrl(session.remoteUrl)) ? 'Opened' : 'Could not open'),
+    })
+  } else if (session.isRunning) {
+    actions.push({
+      label: 'Enable Remote Control…',
+      run: async () => {
+        const wantsCopy = await askConfirm({
+          title: 'Turn on Remote Control',
+          body: (
+            <>
+              <p className="modal-text">
+                Remote Control lets you continue <strong>{session.name || 'this session'}</strong> on claude.ai or in the
+                Claude app, while it keeps running here.
+              </p>
+              <p className="modal-text">
+                A running session turns it on from inside: type <code>/remote-control</code> in its terminal. The console
+                shows it as on as soon as it is.
+              </p>
+            </>
+          ),
+          confirmLabel: 'Copy /remote-control',
+        })
+
+        if (!wantsCopy) return ''
+
+        return (await copy('/remote-control')) ? 'Copied' : 'Copy failed'
+      },
+    })
+  } else if (session.resumeDir) {
+    actions.push({
+      label: 'Resume with Remote Control',
+      run: async () =>
+        (await openTab(session.resumeDir, session.id, true).catch(() => false)) ? 'Opened in Ghostty' : 'Could not open Ghostty',
+    })
+  }
+
   actions.push(
     favoriteIds.includes(session.id)
       ? { label: 'Remove from favorites', run: async () => ((await setFavorite(session, false)) ? 'Removed' : '') }
@@ -2368,7 +2407,7 @@ const SessionRow = ({
 }) => {
   const current = live?.[base.id]
   const session: Session = live
-    ? { ...base, isRunning: !!current, runStatus: current?.status ?? '', runSince: current?.since ?? 0 }
+    ? { ...base, isRunning: !!current, runStatus: current?.status ?? '', runSince: current?.since ?? 0, remoteUrl: current?.remoteUrl ?? '' }
     : base
   const agents = current?.agents ?? 0
   const cost = current?.cost ?? base.cost
@@ -2381,6 +2420,16 @@ const SessionRow = ({
       <span className="session-title">
         <SessionTitle session={session} />
         {session.recap && <RecapButton recap={session.recap} recapAt={session.recapAt} now={now} />}
+        {session.remoteUrl && (
+          <a
+            className="remote-badge"
+            href={session.remoteUrl}
+            aria-label="Remote Control is on: open this session on claude.ai"
+            data-tooltip="Remote Control is on: continue this session on claude.ai or in the Claude app"
+          >
+            rc
+          </a>
+        )}
         {isFavorite && (
           <button
             type="button"
@@ -4267,11 +4316,11 @@ const UsageCard = ({ usage, now }: { usage: Usage | null; now: number }) => {
 
 // Opens a folder in a new tab of the main Ghostty window, resuming a Claude
 // Code session there when one is named.
-const openTab = async (dir: string, session?: string) => {
+const openTab = async (dir: string, session?: string, isRemote = false) => {
   const response = await fetch('/api/terminal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
-    body: JSON.stringify({ dir, session }),
+    body: JSON.stringify({ dir, session, ...(isRemote ? { remote: true } : {}) }),
   })
 
   return response.ok

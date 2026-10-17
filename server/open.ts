@@ -55,7 +55,7 @@ const GHOSTTY_TAB = join(process.cwd(), 'desktop', 'ghostty-tab')
 // Opens a new tab in the main Ghostty window inside dir, resuming the session
 // when one is given. The page only names a folder and a session id; the command
 // itself is built by the ghostty-tab script, never taken from the request.
-export const openTerminal = async (dir: string, session = '') => {
+export const openTerminal = async (dir: string, session = '', isRemote = false) => {
   if (!isAbsolute(dir) || !(await stat(dir).then(s => s.isDirectory(), () => false))) {
     throw new Error(`Not a directory: ${dir}`)
   }
@@ -63,7 +63,7 @@ export const openTerminal = async (dir: string, session = '') => {
   if (session && !isSessionId(session)) throw new Error(`Not a session id: ${session}`)
 
   const env = { ...process.env, ...(await desktopEnv()) }
-  launchApp(GHOSTTY_TAB, session ? [dir, session] : [dir], env)
+  launchApp(GHOSTTY_TAB, session ? [dir, session, ...(isRemote ? ['remote'] : [])] : [dir], env)
 }
 
 // Opens a new tab in the main Ghostty window inside dir and starts a new Claude

@@ -43,7 +43,14 @@ const FLEET_DIR = join(HOME, '.claude', 'fleet')
 const PROJECTS_DIR = join(HOME, '.claude', 'projects')
 const REGISTRY_DIR = join(HOME, '.claude', 'sessions')
 
-type Running = { pid: number; cwd: string; status: string; since: number; name: string; updatedAt: number }
+type Running = { pid: number; cwd: string; status: string; since: number; name: string; updatedAt: number; remoteUrl: string }
+
+// Claude Code records a Remote Control session's id as bridgeSessionId; the
+// session continues at claude.ai/code/<that id>.
+const REMOTE_ID = /^session_[A-Za-z0-9]+$/
+
+export const remoteUrlOf = (bridgeSessionId: unknown) =>
+  typeof bridgeSessionId === 'string' && REMOTE_ID.test(bridgeSessionId) ? `https://claude.ai/code/${bridgeSessionId}` : ''
 
 // The Claude Code processes running now, keyed by the session each one holds,
 // from the per-process registry Claude Code keeps. A pid counts only while its
@@ -66,6 +73,7 @@ export const runningSessions = async (): Promise<Map<string, Running> | null> =>
         statusUpdatedAt?: number
         name?: string
         updatedAt?: number
+        bridgeSessionId?: string
       }
       const stat = await readFile(`/proc/${entry.pid}/stat`, 'utf8')
 
@@ -75,6 +83,7 @@ export const runningSessions = async (): Promise<Map<string, Running> | null> =>
         pid: entry.pid,
         cwd: entry.cwd ?? '',
         status: entry.status ?? '',
+        remoteUrl: remoteUrlOf(entry.bridgeSessionId),
         since: entry.statusUpdatedAt ?? 0,
         name: entry.name ?? '',
         updatedAt: entry.updatedAt ?? 0,
@@ -229,6 +238,7 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
             isRunning: !!proc,
             runStatus: proc?.status ?? '',
             runSince: proc?.since ?? 0,
+            remoteUrl: proc?.remoteUrl ?? '',
           } satisfies Session
         } catch {
           return null
@@ -268,6 +278,7 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
       isRunning: true,
       runStatus: proc.status,
       runSince: proc.since,
+      remoteUrl: proc.remoteUrl,
     })
   }
 
@@ -778,6 +789,7 @@ const favoriteSessionsOf = (favorites: FavoriteSession[], recent: Session[]): Se
       isRunning: false,
       runStatus: '',
       runSince: 0,
+      remoteUrl: '',
     }))
 }
 

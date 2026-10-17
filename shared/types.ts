@@ -27,6 +27,8 @@ export type Session = {
   isRunning: boolean
   runStatus: string
   runSince: number
+  // Where the session continues on claude.ai, while Remote Control is on.
+  remoteUrl: string
   // The name Claude Code knows, when the console shows one you gave it instead.
   claudeName?: string
 }
@@ -43,7 +45,7 @@ export type FavoriteSession = {
   addedAt: number
 }
 
-export type LiveStatus = Record<string, { status: string; since: number; agents: number; cost: number | null }>
+export type LiveStatus = Record<string, { status: string; since: number; agents: number; cost: number | null; remoteUrl: string }>
 
 export type FocusRequest = { session: string; at: number }
 
