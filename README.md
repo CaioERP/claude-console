@@ -96,7 +96,7 @@ claude -p "/daily-briefing" --model haiku --tools "" --no-session-persistence --
 
 ## What It Shows
 
-The console has three pages, **Dashboard**, **Claude Knowledge**, and **Configurations**, (how your Claude Code is set up: memory, instructions, hooks, skills, MCP servers, extensions, and published artifacts); it remembers the one you left open.
+The console has three pages, **Dashboard**, **Claude Knowledge**, and **Configurations** (the cog at the right of the tabs), (how your Claude Code is set up: memory, instructions, hooks, skills, MCP servers, extensions, and published artifacts); it remembers the one you left open.
 
 - **Activity.** A contribution heatmap that combines GitHub contributions with Claude tool calls.
 - **Briefing.** A greeting with your GitHub photo and bio, then what you did on your last working day, every pull request you opened, merged, or closed since yesterday, and the tickets in progress. With `briefing` configured, Claude writes it as a short summary (a headline, a few sentences, and what comes next) with pull requests and tickets linked, and the lists move behind **Show details**. See [Written Briefing](#written-briefing).

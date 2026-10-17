@@ -800,6 +800,30 @@ button:disabled {
   color: var(--ink);
 }
 
+.page-tabs .page-tab-icon {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding-right: 0.15rem;
+  padding-left: 0.15rem;
+}
+
+.page-tabs .page-tab-icon svg {
+  display: block;
+  transition: transform 300ms ease;
+}
+
+.page-tabs .page-tab-icon:hover svg,
+.page-tabs .page-tab-icon[aria-selected='true'] svg {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-tabs .page-tab-icon svg {
+    transition: none;
+  }
+}
+
 .page-tabs button:focus-visible {
   outline: 2px solid var(--bar);
   outline-offset: 3px;

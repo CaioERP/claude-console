@@ -4761,6 +4761,24 @@ const PAGE_TABS: Array<{ id: PageTab; label: string }> = [
   { id: 'settings', label: 'Configurations' },
 ]
 
+const CogIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+    <path
+      d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    />
+    <path
+      d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) => void }) => (
   <div className="page-tabs" role="tablist" aria-label="Console pages">
     {PAGE_TABS.map(option => (
@@ -4771,6 +4789,9 @@ const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) =
         id={`page-tab-${option.id}`}
         aria-selected={tab === option.id}
         aria-controls="page-panel"
+        aria-label={option.id === 'settings' ? option.label : undefined}
+        data-tooltip={option.id === 'settings' ? option.label : undefined}
+        className={option.id === 'settings' ? 'page-tab-icon' : undefined}
         tabIndex={tab === option.id ? 0 : -1}
         onClick={() => onChoose(option.id)}
         onKeyDown={event => {
@@ -4785,7 +4806,7 @@ const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) =
           document.getElementById(`page-tab-${next.id}`)?.focus()
         }}
       >
-        {option.label}
+        {option.id === 'settings' ? <CogIcon /> : option.label}
       </button>
     ))}
   </div>
