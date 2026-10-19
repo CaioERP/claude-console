@@ -8,10 +8,14 @@ import {
   REPOS,
   getSnapshot,
   isWorktreePath,
+  refreshKnowledge,
+  refreshSummary,
   refreshWorktrees,
   removeDormantWorktree,
+  renameSession,
   runningSessions,
   sessionCost,
+  setFavorite,
   workingAgents,
 } from './collect'
 import { isWindowAction, openExternally, openTerminal, startSession, windowAction } from './open'
@@ -21,6 +25,8 @@ import { executeStart, isTicketKey, planWorktree, readRepoState, startPrompt } f
 import { servicesStatus, startStack, stopStack } from './services'
 import { ticketDetail } from './tickets'
 import { readBattery } from './system'
+import { diskUsage, refreshDiskFree } from './disk'
+import { currentPet, petOptions, petSettings, readPetFile, savePetSettings } from './pets'
 
 const ORIGINS = new Set(['http://127.0.0.1:5178', 'http://localhost:5178'])
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -59,8 +65,8 @@ const handleTerminal = async (req: IncomingMessage, res: ServerResponse) => {
   }
 
   try {
-    const { dir, session } = JSON.parse(await readBody(req)) as { dir?: string; session?: string }
-    await openTerminal(String(dir ?? ''), session ? String(session) : '')
+    const { dir, session, remote } = JSON.parse(await readBody(req)) as { dir?: string; session?: string; remote?: boolean }
+    await openTerminal(String(dir ?? ''), session ? String(session) : '', remote === true)
     res.statusCode = 204
     res.end()
   } catch (error) {
@@ -145,14 +151,17 @@ const handleRemoveWorktree = async (req: IncomingMessage, res: ServerResponse) =
   }
 
   try {
-    const { path } = JSON.parse(await readBody(req)) as { path?: string }
-    await removeDormantWorktree(String(path ?? ''))
+    const { path, force } = JSON.parse(await readBody(req)) as { path?: string; force?: boolean }
+    await removeDormantWorktree(String(path ?? ''), force === true)
     res.statusCode = 204
     res.end()
   } catch (error) {
     res.statusCode = 400
     res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    const message = error instanceof Error ? error.message : String(error)
+
+    // Only git's own refusal over modified or untracked files may be forced.
+    res.end(JSON.stringify({ error: message, canForce: /modified or untracked files|use --force/i.test(message) }))
   }
 }
 
@@ -237,7 +246,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     }
 
     try {
-      const { dir, input } = JSON.parse(await readBody(req)) as { dir?: string; input?: string }
+      const { dir, input, env } = JSON.parse(await readBody(req)) as { dir?: string; input?: string; env?: string }
 
       // Given a worktree, an empty session in it; otherwise the configured one in
       // the repository.
@@ -247,7 +256,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
         await startSession(String(dir))
       } else {
         // With several repositories, the configured session starts in the first.
-        await startSession(REPOS[0] ?? '', newSessionPrompt(config, String(input ?? '').trim()))
+        await startSession(REPOS[0] ?? '', newSessionPrompt(config, String(input ?? '').trim(), String(env ?? '')))
       }
 
       res.statusCode = 204
@@ -255,6 +264,76 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     } catch (error) {
       res.statusCode = 400
       res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/knowledge/refresh') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    await refreshKnowledge().catch(() => undefined)
+    res.statusCode = 204
+    res.end()
+    return
+  }
+
+  if (url.pathname === '/api/briefing/regenerate') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    refreshSummary({ force: true })
+    res.statusCode = 202
+    res.end()
+    return
+  }
+
+  if (url.pathname === '/api/session/name') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { session, name } = JSON.parse(await readBody(req)) as { session?: string; name?: string }
+
+      if (!session || !SESSION_ID.test(session)) throw new Error('Not a session id.')
+
+      res.end(JSON.stringify({ names: await renameSession(session, String(name ?? '')) }))
+    } catch (error) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+    }
+    return
+  }
+
+  if (url.pathname === '/api/favorites') {
+    if (!isFromConsole(req)) {
+      res.statusCode = 403
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'application/json')
+
+    try {
+      const { session, isFavorite } = JSON.parse(await readBody(req)) as { session?: string; isFavorite?: boolean }
+
+      if (!session || !SESSION_ID.test(session)) throw new Error('Not a session id.')
+
+      res.end(JSON.stringify({ favorites: await setFavorite(session, isFavorite !== false) }))
+    } catch (error) {
+      res.statusCode = 400
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
     }
     return
@@ -282,10 +361,58 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
     return
   }
 
+  if (url.pathname === '/api/pet-settings') {
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+
+    if (req.method === 'POST') {
+      if (!isFromConsole(req)) {
+        res.statusCode = 403
+        res.end()
+        return
+      }
+
+      try {
+        const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+        const settings = await savePetSettings({
+          ...(typeof body.isEnabled === 'boolean' ? { isEnabled: body.isEnabled } : {}),
+          ...(typeof body.kind === 'string' ? { kind: body.kind } : {}),
+          ...(typeof body.color === 'string' ? { color: body.color } : {}),
+          ...(typeof body.size === 'number' ? { size: body.size } : {}),
+        })
+
+        res.end(JSON.stringify({ settings, pet: await currentPet() }))
+      } catch (error) {
+        res.statusCode = 400
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+      }
+      return
+    }
+
+    res.end(JSON.stringify({ settings: await petSettings(), options: await petOptions() }))
+    return
+  }
+
+  if (url.pathname.startsWith('/api/pet/')) {
+    const data = await readPetFile(decodeURIComponent(url.pathname.slice('/api/pet/'.length)))
+
+    if (!data) {
+      res.statusCode = 404
+      res.end()
+      return
+    }
+
+    res.setHeader('Content-Type', 'image/gif')
+    res.setHeader('Cache-Control', 'max-age=86400')
+    res.end(data)
+    return
+  }
+
   if (url.pathname === '/api/system') {
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Cache-Control', 'no-store')
-    res.end(JSON.stringify({ battery: await readBattery() }))
+    await refreshDiskFree(REPOS[0] ?? '')
+    res.end(JSON.stringify({ battery: await readBattery(), disk: diskUsage(), pet: await currentPet() }))
     return
   }
 
@@ -390,6 +517,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse, next: () => voi
           since: r.since,
           agents: await workingAgents(id, r.cwd).catch(() => 0),
           cost: await sessionCost(id),
+          remoteUrl: r.remoteUrl,
         },
       ]),
     )

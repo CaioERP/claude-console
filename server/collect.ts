@@ -2,16 +2,23 @@ import { open, readFile, readdir, readlink, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 
-import type { PullRequest, RecentPr, Session, Snapshot, Worktree } from '../shared/types'
+import type { FavoriteSession, PullRequest, RecentPr, Session, Snapshot, Worktree } from '../shared/types'
 import { collectContributions } from './activity'
+import { addFavorite, readFavorites, removeFavorite } from './favorites'
 import { collectArtifacts } from './artifacts'
 import { collectProfile } from './profile'
 import { CONFIG_PATH, config, featuresOf } from './config'
 import { quiet, run } from './exec'
 import { collectJira } from './jira'
 import { collectMemory } from './memory'
+import { collectSkills } from './skills'
+import { refreshDiskUsage } from './disk'
+import { collectKnowledge } from './claude-config'
+import { briefingInput } from './briefing-input'
+import { currentSummary, ensureSummary } from './summary'
 import { collectReviewQueue } from './queue'
-import { briefingOf, collectUsage, prUrlsOf, recapOf, responsesOf, titleOf } from './usage'
+import { briefingOf, collectUsage, lastSeenOf, prUrlsOf, recapOf, renamedOf, responsesOf, titleOf } from './usage'
+import { readNames, setName } from './names'
 import {
   DAY_MS,
   LIVE_SESSION_MS,
@@ -36,7 +43,14 @@ const FLEET_DIR = join(HOME, '.claude', 'fleet')
 const PROJECTS_DIR = join(HOME, '.claude', 'projects')
 const REGISTRY_DIR = join(HOME, '.claude', 'sessions')
 
-type Running = { pid: number; cwd: string; status: string; since: number; name: string; updatedAt: number }
+type Running = { pid: number; cwd: string; status: string; since: number; name: string; updatedAt: number; remoteUrl: string }
+
+// Claude Code records a Remote Control session's id as bridgeSessionId; the
+// session continues at claude.ai/code/<that id>.
+const REMOTE_ID = /^session_[A-Za-z0-9]+$/
+
+export const remoteUrlOf = (bridgeSessionId: unknown) =>
+  typeof bridgeSessionId === 'string' && REMOTE_ID.test(bridgeSessionId) ? `https://claude.ai/code/${bridgeSessionId}` : ''
 
 // The Claude Code processes running now, keyed by the session each one holds,
 // from the per-process registry Claude Code keeps. A pid counts only while its
@@ -59,6 +73,7 @@ export const runningSessions = async (): Promise<Map<string, Running> | null> =>
         statusUpdatedAt?: number
         name?: string
         updatedAt?: number
+        bridgeSessionId?: string
       }
       const stat = await readFile(`/proc/${entry.pid}/stat`, 'utf8')
 
@@ -68,6 +83,7 @@ export const runningSessions = async (): Promise<Map<string, Running> | null> =>
         pid: entry.pid,
         cwd: entry.cwd ?? '',
         status: entry.status ?? '',
+        remoteUrl: remoteUrlOf(entry.bridgeSessionId),
         since: entry.statusUpdatedAt ?? 0,
         name: entry.name ?? '',
         updatedAt: entry.updatedAt ?? 0,
@@ -182,8 +198,8 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
 
           return {
             id,
-            name: name || titleOf(id),
-            isAutoTitle: !name && !!titleOf(id),
+            name: name || renamedOf(id) || titleOf(id),
+            isAutoTitle: !name && !renamedOf(id) && !!titleOf(id),
             responses: responsesOf(id),
             recap: recapOf(id).text,
             recapAt: recapOf(id).at,
@@ -205,6 +221,7 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
             isRunning: !!proc,
             runStatus: proc?.status ?? '',
             runSince: proc?.since ?? 0,
+            remoteUrl: proc?.remoteUrl ?? '',
           } satisfies Session
         } catch {
           return null
@@ -221,8 +238,8 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
 
     sessions.push({
       id,
-      name: titleOf(id),
-      isAutoTitle: !!titleOf(id),
+      name: renamedOf(id) || titleOf(id),
+      isAutoTitle: !renamedOf(id) && !!titleOf(id),
       responses: responsesOf(id),
       recap: recapOf(id).text,
       recapAt: recapOf(id).at,
@@ -244,6 +261,7 @@ export const collectSessions = async (now: number): Promise<Session[]> => {
       isRunning: true,
       runStatus: proc.status,
       runSince: proc.since,
+      remoteUrl: proc.remoteUrl,
     })
   }
 
@@ -339,6 +357,7 @@ export const collectWorktrees = async (sessions: Session[], now: number): Promis
 }
 
 type SearchHit = {
+  author?: { login?: string }
   number: number
   title: string
   url: string
@@ -357,18 +376,36 @@ type PrDetail = {
   statusCheckRollup: RollupItem[] | null
 }
 
-export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> => {
-  const hits = JSON.parse(
+const searchPrs = async (qualifier: string) =>
+  JSON.parse(
     await run(
       'gh',
       [
-        'search', 'prs', '--author=@me', '--state=open', '--limit', '50',
-        '--json', 'number,title,url,isDraft,createdAt,updatedAt,repository',
+        'search', 'prs', qualifier, '--state=open', '--limit', '50',
+        '--json', 'number,title,url,isDraft,createdAt,updatedAt,repository,author',
       ],
       { timeoutMs: 30_000 },
     ),
   ) as SearchHit[]
 
+let ghLogin = ''
+
+// Open pull requests by others that are assigned to you or ask for your
+// review, once each.
+export const collectAssignedPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> => {
+  ghLogin ||= (await run('gh', ['api', 'user', '--jq', '.login'])).trim()
+
+  const [assigned, requested] = await Promise.all([searchPrs('--assignee=@me'), searchPrs('--review-requested=@me')])
+  const byUrl = new Map([...assigned, ...requested].map(hit => [hit.url, hit] as const))
+  const others = [...byUrl.values()].filter(hit => hit.author?.login !== ghLogin)
+
+  return detailPrs(others, worktrees)
+}
+
+export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> =>
+  detailPrs(await searchPrs('--author=@me'), worktrees)
+
+const detailPrs = async (hits: SearchHit[], worktrees: Worktree[]): Promise<PullRequest[]> => {
   return mapLimit(hits, 4, async hit => {
     const repo = hit.repository.nameWithOwner
     const detail = await quiet(
@@ -387,6 +424,7 @@ export const collectPrs = async (worktrees: Worktree[]): Promise<PullRequest[]> 
 
     return {
       repo,
+      author: hit.author?.login ?? '',
       number: hit.number,
       title: hit.title,
       url: hit.url,
@@ -469,12 +507,19 @@ const state: Snapshot = {
   jiraAt: 0,
   queue: null,
   features: featuresOf(config),
+  favorites: [],
+  favoriteSessions: [],
+  names: {},
   contributions: null,
   memory: [],
+  skills: [],
+  knowledge: { mcp: { servers: [], checkedAt: 0, error: '' }, instructions: [], hooks: [], extensions: [] },
   artifacts: [],
   profile: null,
   briefing: null,
+  summary: { status: 'off', text: '', generatedAt: 0, model: '', error: '' },
   recentPrs: [],
+  assignedPrs: [],
   worktreesAt: 0,
   prsAt: 0,
   errors: {},
@@ -532,6 +577,25 @@ const refreshUsage = () =>
     }
 
     try {
+      // Personal skills once, plus each repository's project skills.
+      const lists = await Promise.all(REPOS.map(collectSkills))
+
+      state.skills = [...new Map(lists.flat().map(skill => [skill.path, skill])).values()]
+      delete state.errors.skills
+    } catch (error) {
+      state.errors.skills = error instanceof Error ? error.message : String(error)
+    }
+
+    try {
+      // Claude's setup (instructions, hooks, MCP) is read for the first
+      // repository; with several, the others share the personal parts of it.
+      state.knowledge = await collectKnowledge(REPOS[0] ?? '')
+      delete state.errors.knowledge
+    } catch (error) {
+      state.errors.knowledge = error instanceof Error ? error.message : String(error)
+    }
+
+    try {
       const notes = await Promise.all(REPOS.map(collectMemory))
 
       // Notes of several repositories can share a file name, so each keeps its
@@ -563,10 +627,11 @@ export const refreshWorktrees = () =>
     try {
       state.sessions = await collectSessions(now)
       state.worktrees = await collectWorktrees(state.sessions, now)
+      refreshDiskUsage(REPOS[0] ?? '', state.worktrees.map(w => w.path))
       state.worktreesAt = Date.now()
       delete state.errors.worktrees
 
-      for (const pr of state.prs) {
+      for (const pr of [...state.prs, ...state.assignedPrs]) {
         pr.worktreePath = state.worktrees.find(w => w.branch && w.branch === pr.branch)?.path ?? ''
       }
     } catch (error) {
@@ -578,11 +643,14 @@ export const refreshWorktrees = () =>
 
 const refreshPrs = () =>
   (prsJob ??= (async () => {
-    const [prs, queue, recent] = await Promise.allSettled([
+    const [prs, queue, recent, assigned] = await Promise.allSettled([
       collectPrs(state.worktrees),
       config.reviewQueue ? collectReviewQueue(config.reviewQueue) : Promise.resolve(null),
       collectRecentPrs(Date.now()),
+      collectAssignedPrs(state.worktrees),
     ])
+
+    if (assigned.status === 'fulfilled') state.assignedPrs = assigned.value
 
     if (recent.status === 'fulfilled') state.recentPrs = recent.value
 
@@ -640,14 +708,120 @@ export const getSnapshot = async (options: { force?: boolean } = {}): Promise<Sn
     if (options.force) await job
   }
 
-  return { ...state, generatedAt: Date.now() }
+  refreshSummary()
+
+  const [favorites, names] = await Promise.all([readFavorites(), readNames()])
+  const named = (session: Session): Session =>
+    names[session.id] ? { ...session, name: names[session.id]!, claudeName: session.name, isAutoTitle: false } : session
+  const briefing = state.briefing && {
+    ...state.briefing,
+    sessions: state.briefing.sessions.map(s => (names[s.id] ? { ...s, title: names[s.id]! } : s)),
+  }
+
+  return {
+    ...state,
+    sessions: state.sessions.map(named),
+    briefing,
+    favorites: favorites.map(f => f.id),
+    favoriteSessions: favoriteSessionsOf(favorites, state.sessions).map(named),
+    names,
+    summary: currentSummary(),
+    generatedAt: Date.now(),
+  }
 }
 
-// Removes a dormant worktree's folder with `git worktree remove`, never forced:
-// git refuses when it holds modified or untracked files, so uncommitted work is
-// never lost, and the branch stays. Only a dormant worktree listed by git, other
+// Writes or refreshes the briefing's summary once the data it is made of has
+// been read at least once: the transcripts, the pull requests and, when on, Jira.
+export const refreshSummary = (options: { force?: boolean } = {}) => {
+  if (!config.briefing) return ensureSummary(briefingInput(state, '', Date.now()), null)
+
+  if (!usageAt || !state.prsAt || (config.jira && !state.jiraAt)) return
+
+  ensureSummary(briefingInput(state, config.briefing.language, Date.now()), config.briefing, options)
+}
+
+// Checks the MCP servers again now, and rereads the rest of Claude's setup.
+export const refreshKnowledge = async () => {
+  state.knowledge = await collectKnowledge(REPOS[0] ?? '', { forceMcp: true })
+}
+
+// Gives a session a name in the console, or takes it away when name is empty.
+export const renameSession = async (id: string, name: string) => {
+  const known = state.sessions.some(s => s.id === id) || (await readFavorites()).some(f => f.id === id)
+
+  if (!known) throw new Error('This session is not listed in the console.')
+
+  return setName(id, name)
+}
+
+// Starred sessions no longer among the recent ones, as session rows: the name
+// and folders kept when starred, with the title, recap and last activity the
+// transcripts still hold.
+const favoriteSessionsOf = (favorites: FavoriteSession[], recent: Session[]): Session[] => {
+  const known = new Set(recent.map(s => s.id))
+
+  return favorites
+    .filter(f => !known.has(f.id))
+    .map(f => ({
+      id: f.id,
+      name: f.name || renamedOf(f.id) || titleOf(f.id),
+      isAutoTitle: !f.name && !renamedOf(f.id) && !!titleOf(f.id),
+      responses: responsesOf(f.id),
+      recap: recapOf(f.id).text,
+      recapAt: recapOf(f.id).at,
+      prUrls: prUrlsOf(f.id),
+      branch: f.branch,
+      model: '',
+      top: f.top,
+      dir: f.dir,
+      resumeDir: f.resumeDir,
+      ctx: 0,
+      h5: null,
+      h5Reset: '',
+      h5ResetAt: null,
+      d7: null,
+      d7ResetAt: null,
+      cost: null,
+      seenAt: lastSeenOf(f.id) || f.addedAt,
+      isLive: false,
+      isRunning: false,
+      runStatus: '',
+      runSince: 0,
+      remoteUrl: '',
+    }))
+}
+
+// Stars a session, keeping what is needed to list and resume it later, or
+// takes the star away. Returns the starred ids, newest first.
+export const setFavorite = async (id: string, isFavorite: boolean) => {
+  if (isFavorite) {
+    const favorites = await readFavorites()
+    const session = state.sessions.find(s => s.id === id) ?? favoriteSessionsOf(favorites, state.sessions).find(s => s.id === id)
+
+    if (!session) throw new Error('This session is not listed in the console.')
+
+    await addFavorite({
+      id,
+      name: session.isAutoTitle ? '' : session.name,
+      branch: session.branch,
+      top: session.top,
+      dir: session.dir,
+      resumeDir: session.resumeDir,
+      addedAt: Date.now(),
+    })
+  } else {
+    await removeFavorite(id)
+  }
+
+  return (await readFavorites()).map(f => f.id)
+}
+
+// Removes a dormant worktree's folder with `git worktree remove`. Unforced, git
+// refuses when it holds modified or untracked files, so uncommitted work is
+// never lost; forced, only after the person confirmed losing those files. The
+// branch and its commits stay either way. Only a dormant worktree listed by git, other
 // than the main checkout, with no dev server and no running session, qualifies.
-export const removeDormantWorktree = async (path: string) => {
+export const removeDormantWorktree = async (path: string, force = false) => {
   await refreshWorktrees()
 
   const worktree = state.worktrees.find(w => w.path === path)
@@ -658,7 +832,7 @@ export const removeDormantWorktree = async (path: string) => {
   if (worktree.sessions.some(s => s.isRunning)) throw new Error('A Claude session is running in it.')
 
   try {
-    await run('git', ['-C', worktree.repo, 'worktree', 'remove', '--', path], { timeoutMs: 5 * 60_000 })
+    await run('git', ['-C', worktree.repo, 'worktree', 'remove', ...(force ? ['--force'] : []), '--', path], { timeoutMs: 5 * 60_000 })
   } catch (error) {
     const message = (error as { stderr?: string }).stderr || (error instanceof Error ? error.message : String(error))
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Usage: ghostty-tab <dir> [session-id]
+# Usage: ghostty-tab <dir> [session-id [remote]]
 #        ghostty-tab --new <dir> [prompt]
 #
 # Opens a new tab in the main Ghostty window and changes into <dir>. Given a
 # session id, it resumes that Claude Code session there; with --new, it starts
-# a new Claude Code session, sending [prompt] as its first message. The main
+# a new Claude Code session, sending [prompt] as its first message. With
+# remote, the resumed session turns Remote Control on. The main
 # window is the Ghostty window highest in the stacking order. Keystrokes are
 # typed only after the new tab is confirmed to have the focus; otherwise nothing
 # is typed. Without any Ghostty window, a new one opens in <dir> and runs the
@@ -14,7 +15,7 @@
 
 set -uo pipefail
 
-usage="usage: ghostty-tab <dir> [session-id] | ghostty-tab --new <dir> [prompt]"
+usage="usage: ghostty-tab <dir> [session-id [remote]] | ghostty-tab --new <dir> [prompt]"
 is_new=false
 
 if [ "${1:-}" = "--new" ]; then
@@ -24,6 +25,7 @@ fi
 
 dir="${1:?$usage}"
 second="${2:-}"
+third="${3:-}"
 
 [ -d "$dir" ] || { echo "No such directory: $dir" >&2; exit 2; }
 
@@ -39,6 +41,13 @@ elif [ -n "$second" ]; then
 	fi
 
 	claude_command="claude --resume $second"
+
+	if [ "$third" = "remote" ]; then
+		claude_command="$claude_command --remote-control"
+	elif [ -n "$third" ]; then
+		echo "Not an option: $third" >&2
+		exit 2
+	fi
 fi
 
 quoted=$(printf '%q' "$dir")

@@ -459,6 +459,89 @@ export const parseMemoryNote = (text: string) => {
   return { name: field('name'), description: field('description'), type: field('type') || 'note', body }
 }
 
+// The frontmatter fields of a SKILL.md: plain, quoted, or folded over several
+// indented lines (YAML's ">" and "|").
+export const parseSkill = (text: string) => {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
+  const lines = front.split(/\r?\n/)
+  const field = (key: string) => {
+    const at = lines.findIndex(line => new RegExp(`^${key}:`).test(line))
+
+    if (at < 0) return ''
+
+    const first = lines[at]!.slice(key.length + 1).trim()
+    const rest: string[] = []
+
+    for (const line of lines.slice(at + 1)) {
+      if (!/^\s+\S/.test(line)) break
+
+      rest.push(line.trim())
+    }
+
+    const value = /^[>|][-+]?$/.test(first) ? rest.join(' ') : [first, ...rest].join(' ')
+    const quoted = /^(["'])([\s\S]*)\1$/.exec(value.trim())
+
+    return (quoted ? quoted[2]!.replace(/\\"/g, '"') : value).replace(/\s+/g, ' ').trim()
+  }
+
+  return { name: field('name'), description: field('description'), argumentHint: field('argument-hint') }
+}
+
+// The skills a transcript row used: one Claude called with the Skill tool, or
+// one the person ran by typing its slash command. Each use carries an id so a
+// row read twice is counted once.
+export const parseSkillUses = (line: string): Array<{ id: string; name: string; at: number }> => {
+  if (!line.includes('"Skill"') && !line.includes('<command-name>')) return []
+
+  try {
+    const row = JSON.parse(line) as {
+      type?: string
+      uuid?: string
+      timestamp?: string
+      isSidechain?: boolean
+      message?: { content?: unknown }
+    }
+    const at = Date.parse(row.timestamp ?? '') || 0
+    const content = row.message?.content
+
+    if (row.type === 'user' && !row.isSidechain && typeof content === 'string' && content.startsWith('<command-message>')) {
+      const name = /<command-name>\/?([^<\s]+)<\/command-name>/.exec(content)?.[1]
+
+      return name && row.uuid ? [{ id: row.uuid, name, at }] : []
+    }
+
+    if (row.type === 'assistant' && Array.isArray(content)) {
+      return content
+        .filter(
+          (block): block is { id: string; input: { skill: string } } =>
+            !!block && block.type === 'tool_use' && block.name === 'Skill' && typeof block.input?.skill === 'string',
+        )
+        .map(block => ({ id: block.id, name: block.input.skill, at }))
+    }
+  } catch {
+    // Not a transcript row.
+  }
+
+  return []
+}
+
+// One line of `claude mcp list`: "name: target - ✔ Connected", "! Needs
+// authentication", or "✘ Failed to connect — reason". Query strings are dropped
+// from the target, since a URL there may carry a key.
+export const parseMcpLine = (
+  line: string,
+): { name: string; target: string; status: 'connected' | 'auth' | 'failed'; detail: string } | null => {
+  const match = /^(.+?): (.+) - ([✔✓!✘✗]) (.+)$/.exec(line.trim())
+
+  if (!match) return null
+
+  const [, name, target, mark, rest] = match as unknown as [string, string, string, string, string]
+  const status = mark === '✔' || mark === '✓' ? 'connected' : mark === '!' ? 'auth' : 'failed'
+  const detail = status === 'failed' ? rest.replace(/^Failed to connect\s*[—-]?\s*/, '') : ''
+
+  return { name, target: target.replace(/\?\S*/, ''), status, detail }
+}
+
 // The MEMORY.md index: each line's title and one-line hook, by file name.
 export const parseMemoryIndex = (text: string) => {
   const entries = new Map<string, { title: string; hook: string }>()
@@ -569,15 +652,16 @@ export const parseSessionRow = (line: string): { sessionId: string; at: number; 
   }
 }
 
+// The name a session was given with /rename: an "agent-name" row, which Claude
+// Code writes again as the session goes on, or the older "custom-title" row.
 export const parseCustomTitle = (line: string): { sessionId: string; title: string } | null => {
-  if (!line.includes('"custom-title"')) return null
+  if (!line.includes('"agent-name"') && !line.includes('"custom-title"')) return null
 
   try {
-    const row = JSON.parse(line) as { type?: string; sessionId?: string; customTitle?: string }
+    const row = JSON.parse(line) as { type?: string; sessionId?: string; customTitle?: string; agentName?: string }
+    const title = row.type === 'agent-name' ? row.agentName : row.type === 'custom-title' ? row.customTitle : ''
 
-    return row.type === 'custom-title' && row.sessionId && row.customTitle
-      ? { sessionId: row.sessionId, title: row.customTitle }
-      : null
+    return row.sessionId && title ? { sessionId: row.sessionId, title } : null
   } catch {
     return null
   }

@@ -93,7 +93,7 @@ describe('resolveConfig', () => {
       hasIcon: true,
       jira: false,
       reviewQueue: { name: 'Rev', repo: 'o/r' },
-      newSession: { needsInput: false, inputLabel: '', prompt: '', description: '' },
+      newSession: { needsInput: false, inputLabel: '', prompt: '', description: '', environments: [] },
       startWork: null,
       services: false,
     })
@@ -105,7 +105,7 @@ describe('newSessionPrompt', () => {
 
   it('fills the typed ticket or name into the first message', () => {
     expect(newSessionPrompt(config, 'ABC-12')).toBe('/setup ABC-12')
-    expect(featuresOf(config).newSession).toEqual({ needsInput: true, inputLabel: 'Ticket', prompt: '/setup {input}', description: '' })
+    expect(featuresOf(config).newSession).toEqual({ needsInput: true, inputLabel: 'Ticket', prompt: '/setup {input}', description: '', environments: [] })
   })
 
   it('refuses anything a terminal could read as more than a name', () => {
@@ -116,5 +116,35 @@ describe('newSessionPrompt', () => {
 
   it('starts an empty session when nothing is configured', () => {
     expect(newSessionPrompt(resolveConfig({}, {}), 'ignored')).toBe('')
+  })
+})
+
+describe('newSessionPrompt with an environment and a pull request', () => {
+  const config = resolveConfig(
+    {
+      newSession: {
+        prompt: '/setup {input} {env}',
+        inputLabel: 'Ticket',
+        description: '',
+        environments: [{ label: 'STG', value: 'stg' }, { label: 'Bad', value: 'x; rm' }],
+      },
+    },
+    {},
+  )
+
+  it('adds the chosen environment, or nothing when none is chosen', () => {
+    expect(newSessionPrompt(config, 'ABC-1', 'stg')).toBe('/setup ABC-1 stg')
+    expect(newSessionPrompt(config, 'ABC-1')).toBe('/setup ABC-1')
+  })
+
+  it('accepts a GitHub pull request link as the input', () => {
+    expect(newSessionPrompt(config, 'https://github.com/o/r/pull/12', 'stg')).toBe('/setup https://github.com/o/r/pull/12 stg')
+    expect(() => newSessionPrompt(config, 'https://evil.example/pull/1')).toThrow()
+    expect(() => newSessionPrompt(config, 'https://github.com/o/r/pull/12;id')).toThrow()
+  })
+
+  it('refuses environments that are not configured, and drops unsafe ones from the config', () => {
+    expect(() => newSessionPrompt(config, 'ABC-1', 'prod')).toThrow()
+    expect(() => newSessionPrompt(config, 'ABC-1', 'x; rm')).toThrow()
   })
 })

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Usage: terminator-tab <dir> [session-id]
+# Usage: terminator-tab <dir> [session-id [remote]]
 #        terminator-tab --new <dir> [prompt]
 #
 # Opens a new tab in the running Terminator window inside <dir>. Given a session
-# id, it resumes that Claude Code session there; with --new, it starts a new
-# Claude Code session, sending [prompt] as its first message. The tab keeps a
+# id, it resumes that Claude Code session there, with Remote Control on when
+# followed by remote; with --new, it starts a new Claude Code session, sending
+# [prompt] as its first message. The tab keeps a
 # shell open after Claude exits. Without a running Terminator, a new window
 # opens.
 #
@@ -12,7 +13,7 @@
 
 set -uo pipefail
 
-usage="usage: terminator-tab <dir> [session-id] | terminator-tab --new <dir> [prompt]"
+usage="usage: terminator-tab <dir> [session-id [remote]] | terminator-tab --new <dir> [prompt]"
 is_new=false
 
 if [ "${1:-}" = "--new" ]; then
@@ -22,6 +23,7 @@ fi
 
 dir="${1:?$usage}"
 second="${2:-}"
+third="${3:-}"
 
 [ -d "$dir" ] || { echo "No such directory: $dir" >&2; exit 2; }
 
@@ -42,7 +44,14 @@ elif [ -n "$second" ]; then
 		exit 2
 	fi
 
-	args+=(-x bash -ic 'claude --resume "$1"; exec bash' bash "$second")
+	if [ "$third" = "remote" ]; then
+		args+=(-x bash -ic 'claude --resume "$1" --remote-control; exec bash' bash "$second")
+	elif [ -n "$third" ]; then
+		echo "Not an option: $third" >&2
+		exit 2
+	else
+		args+=(-x bash -ic 'claude --resume "$1"; exec bash' bash "$second")
+	fi
 fi
 
 if [ -n "${DRY_RUN:-}" ]; then

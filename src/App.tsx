@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 
 import type {
+  PetOptions,
+  PetSettings,
+  Pet,
+  DiskUsage,
+  ClaudeKnowledge,
+  Extension,
+  Instruction,
+  McpServer,
+  Skill,
   Battery,
   Activity,
   ReviewQueue,
@@ -9,7 +18,6 @@ import type {
   Contributions,
   JiraIssue,
   MemoryNote,
-  Profile,
   PublishedArtifact,
   LiveResponse,
   LiveStatus,
@@ -41,9 +49,14 @@ import {
   verbFor,
   worktreeOf,
   briefingPrs,
+  bytesLabel,
+  summaryParagraphs,
+  type SummaryToken,
   type BriefPr,
   type PrEvent,
 } from './format'
+import { BALL, type Ball, hitBall, newBall, stepBall } from './ballPhysics'
+import { EmojiLoader } from './EmojiLoader'
 import { MemoryGraph } from './MemoryGraph'
 import { useScrollEdges } from './scrollEdges'
 import { ServicesPanel } from './Services'
@@ -67,9 +80,14 @@ const readTheme = (): Theme => {
 }
 
 const SYSTEM_POLL_MS = 30_000
+const SYSTEM_REFRESH = 'claude-console:system-refresh'
 
-const useBattery = () => {
-  const [battery, setBattery] = useState<Battery | null>(null)
+const useSystem = () => {
+  const [system, setSystem] = useState<{ battery: Battery | null; disk: DiskUsage | null; pet: Pet | null }>({
+    battery: null,
+    disk: null,
+    pet: null,
+  })
 
   useEffect(() => {
     let isActive = true
@@ -78,7 +96,7 @@ const useBattery = () => {
       try {
         const response = await fetch('/api/system')
 
-        if (response.ok && isActive) setBattery(((await response.json()) as { battery: Battery | null }).battery)
+        if (response.ok && isActive) setSystem((await response.json()) as { battery: Battery | null; disk: DiskUsage | null; pet: Pet | null })
       } catch {
         // Keep the last reading until the server answers again.
       }
@@ -86,14 +104,18 @@ const useBattery = () => {
 
     void load()
     const timer = setInterval(() => void load(), SYSTEM_POLL_MS)
+    const onRefresh = () => void load()
+
+    window.addEventListener(SYSTEM_REFRESH, onRefresh)
 
     return () => {
       isActive = false
       clearInterval(timer)
+      window.removeEventListener(SYSTEM_REFRESH, onRefresh)
     }
   }, [])
 
-  return battery
+  return system
 }
 
 // The wall clock, ticking over exactly on each new minute.
@@ -125,7 +147,7 @@ const BatteryMeter = ({ battery }: { battery: Battery }) => {
   const state = battery.isCharging ? 'charging' : battery.isPluggedIn ? 'plugged in' : 'on battery'
 
   return (
-    <span className="win-battery" data-level={batteryLevel(battery)} title={`Battery ${battery.percent}%, ${state}`}>
+    <span className="win-battery" data-level={batteryLevel(battery)} data-tooltip={`Battery ${battery.percent}%, ${state}`}>
       <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
         <rect x="0.5" y="0.5" width="20" height="11" rx="2.5" fill="none" stroke="currentColor" opacity="0.55" />
         <rect x="21.5" y="3.5" width="2" height="5" rx="1" fill="currentColor" opacity="0.55" />
@@ -138,6 +160,360 @@ const BatteryMeter = ({ battery }: { battery: Battery }) => {
       <span className="visually-hidden">, {state}</span>
     </span>
   )
+}
+
+const percent = (part: number, whole: number) => {
+  const share = whole > 0 ? (part / whole) * 100 : 0
+
+  return `${share < 10 ? share.toFixed(1) : Math.round(share)}%`
+}
+
+// A slice of a 16px pie from one share of the circle to another, starting at
+// twelve o'clock and going clockwise.
+const pieSlice = (from: number, to: number) => {
+  const point = (share: number) => {
+    const angle = share * 2 * Math.PI - Math.PI / 2
+
+    return `${(8 + 7 * Math.cos(angle)).toFixed(2)} ${(8 + 7 * Math.sin(angle)).toFixed(2)}`
+  }
+
+  if (to - from >= 0.9999) return 'M8 1a7 7 0 1 1 0 14a7 7 0 1 1 0-14Z'
+
+  return `M8 8L${point(from)}A7 7 0 ${to - from > 0.5 ? 1 : 0} 1 ${point(to)}Z`
+}
+
+// The disk as a mini pie: the worktrees' share in the accent color, the rest
+// of what is used in neutral gray, and the free space as the empty track.
+const DiskPie = ({ usage }: { usage: DiskUsage }) => {
+  const size = usage.disk?.size ?? 0
+  const worktrees = size ? Math.min(1, usage.totalBytes / size) : 0
+  const used = size ? Math.min(1, Math.max(worktrees, usage.disk!.used / size)) : 0
+
+  return (
+    <svg className="disk-pie" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle className="disk-pie-free" cx="8" cy="8" r="7" />
+      {used > worktrees && <path className="disk-pie-other" d={pieSlice(worktrees, used)} />}
+      {worktrees > 0 && <path className="disk-pie-worktrees" d={pieSlice(0, worktrees)} />}
+    </svg>
+  )
+}
+
+const worktreeName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
+
+// What the worktrees take on disk, with the largest ones and the disk's free
+// space in its tooltip. It turns red when the disk is almost full.
+const WorktreeDisk = ({ usage }: { usage: DiskUsage }) => {
+  const freeShare = usage.disk ? usage.disk.free / usage.disk.size : 1
+  const level = freeShare < 0.1 ? 'critical' : freeShare < 0.2 ? 'low' : 'ok'
+  const largest = usage.worktrees
+    .slice(0, 5)
+    .map(w => `  ${worktreeName(w.path)}: ${bytesLabel(w.bytes)}`)
+    .join('\n')
+  const tooltip = [
+    usage.scannedAt
+      ? `${usage.worktrees.length} worktrees take ${bytesLabel(usage.totalBytes)}${usage.isScanning ? ' (measuring again…)' : ''}`
+      : 'Measuring the worktrees…',
+    largest && `Largest:\n${largest}`,
+    usage.disk &&
+      [
+        `Disk: ${bytesLabel(usage.disk.size)}`,
+        `worktrees: ${percent(usage.totalBytes, usage.disk.size)}`,
+        `everything else: ${percent(Math.max(0, usage.disk.used - usage.totalBytes), usage.disk.size)}`,
+        `free: ${percent(usage.disk.free, usage.disk.size)} (${bytesLabel(usage.disk.free)})`,
+      ].join('\n'),
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  return (
+    <span className="win-disk" data-level={level} data-tooltip={tooltip} tabIndex={0}>
+      <DiskPie usage={usage} />
+      <span>{usage.scannedAt ? bytesLabel(usage.totalBytes) : 'Measuring…'}</span>
+      <span className="visually-hidden"> in worktrees</span>
+    </span>
+  )
+}
+
+const PET_SPEED = 26
+const PET_RUN_SPEED = 110
+const PET_MARGIN = 20
+const BALL_EVENT = 'claude-console:throw-ball'
+const MAX_BALLS = 5
+
+type PetAction = 'walk' | 'idle' | 'lie' | 'run' | 'play'
+
+// A pet from vscode-pets walking the empty stretch of the window bar between
+// the title and the status: it strolls to a random spot, then stands or lies
+// down for a while, turning to face where it goes. A click on the empty bar
+// drops a ball there, up to five at a time; each bounces to the floor, and the
+// pet fetches them one by one, nearest first, playing with each before the next. Everything moves straight on the elements each frame, never through
+// React, and nothing moves when motion is reduced.
+const WalkingPet = ({
+  pet,
+  bar,
+  title,
+  status,
+}: {
+  pet: Pet
+  bar: RefObject<HTMLDivElement>
+  title: RefObject<HTMLHeadingElement>
+  status: RefObject<HTMLDivElement>
+}) => {
+  const sprite = useRef<HTMLImageElement>(null)
+  const ballNodes = useRef<Array<HTMLSpanElement | null>>([])
+  const [action, setAction] = useState<PetAction>('idle')
+  const pathOf = (which: PetAction) =>
+    (which === 'lie' && pet.lie) ||
+    (which === 'run' && (pet.run || pet.walk)) ||
+    (which === 'play' && (pet.withBall || pet.idle)) ||
+    (which === 'walk' ? pet.walk : pet.idle)
+
+  useEffect(() => {
+    for (const path of [pet.walk, pet.idle, pet.lie, pet.run, pet.withBall].filter(Boolean)) new Image().src = `/api/pet/${path}`
+  }, [pet])
+
+  useEffect(() => {
+    const lane = { left: 0, right: 0, floor: 0 }
+    const measure = () => {
+      if (!bar.current || !title.current || !status.current) return
+
+      const box = bar.current.getBoundingClientRect()
+      const width = sprite.current?.getBoundingClientRect().width || pet.size
+
+      lane.left = title.current.getBoundingClientRect().right - box.left + PET_MARGIN
+      lane.right = status.current.getBoundingClientRect().left - box.left - PET_MARGIN - width
+      lane.floor = box.height - BALL.size - 3
+    }
+    const observer = new ResizeObserver(measure)
+
+    if (bar.current) observer.observe(bar.current)
+    if (status.current) observer.observe(status.current)
+
+    measure()
+
+    const spriteWidth = () => sprite.current?.getBoundingClientRect().width || pet.size
+    let x = lane.left + Math.max(0, lane.right - lane.left) * Math.random()
+    let target = x
+    let facing = 1
+    let mode: PetAction = 'idle'
+    let until = performance.now() + 1500
+    let last = performance.now()
+    let frame = 0
+    // The balls in play, moved in place each frame.
+    const balls: Ball[] = []
+    let chasing: Ball | null = null
+
+    const place = () => {
+      const node = sprite.current
+
+      if (node) {
+        node.style.visibility = lane.right - lane.left < 40 ? 'hidden' : 'visible'
+        node.style.transform = `translateX(${Math.round(x)}px) scaleX(${facing})`
+      }
+
+      ballNodes.current.forEach((dot, at) => {
+        const ball = balls[at]
+
+        if (!dot) return
+
+        dot.style.display = ball ? 'block' : 'none'
+
+        if (ball) dot.style.transform = `translate(${Math.round(ball.x - BALL.size / 2)}px, ${Math.round(ball.y)}px)`
+      })
+    }
+
+    const become = (next: PetAction) => {
+      mode = next
+      setAction(next)
+    }
+
+    // Runs to the nearest ball left, if any.
+    const chaseNext = () => {
+      const width = spriteWidth()
+      const center = x + width / 2
+      const next = [...balls].sort((a, b) => Math.abs(a.x - center) - Math.abs(b.x - center))[0]
+
+      if (!next) return false
+
+      chasing = next
+      target = next.x - width / 2
+      facing = target >= x ? 1 : -1
+      become('run')
+
+      return true
+    }
+
+    const onThrow = (event: Event) => {
+      if (balls.length >= MAX_BALLS) return
+
+      const { x: at, y } = (event as CustomEvent<{ x: number; y: number }>).detail
+      const width = spriteWidth()
+      const ballX = Math.min(Math.max(at, lane.left + width / 2), lane.right + width / 2)
+
+      balls.push(newBall(ballX, Math.min(Math.max(0, y - BALL.size / 2), lane.floor)))
+
+      // Already fetching or playing, it gets to this one afterward.
+      if (mode !== 'run' && mode !== 'play') chaseNext()
+
+      place()
+    }
+
+    // Where the balls' centers may go: the empty stretch of the bar.
+    const ballBounds = () => ({
+      left: lane.left + BALL.size / 2,
+      right: lane.right + spriteWidth() - BALL.size / 2,
+      floor: lane.floor,
+    })
+
+    // The pointer moving over the bar hits the balls it passes, at its speed.
+    let lastPointer: { x: number; y: number; at: number } | null = null
+
+    const onPointerMove = (event: PointerEvent) => {
+      const box = bar.current?.getBoundingClientRect()
+
+      if (!box || balls.length === 0) return
+
+      const point = { x: event.clientX - box.left, y: event.clientY - box.top, at: performance.now() }
+      const elapsed = lastPointer ? Math.max(0.008, (point.at - lastPointer.at) / 1000) : 0
+      const velocity = lastPointer && elapsed < 0.2
+        ? { x: (point.x - lastPointer.x) / elapsed, y: (point.y - lastPointer.y) / elapsed }
+        : { x: 0, y: 0 }
+
+      lastPointer = point
+
+      let wasHit = false
+
+      for (const ball of balls) {
+        const next = hitBall(ball, point, velocity, point.at)
+
+        if (next !== ball) {
+          Object.assign(ball, next)
+          wasHit = true
+        }
+      }
+
+      if (wasHit && (mode === 'walk' || mode === 'idle' || mode === 'lie')) chaseNext()
+    }
+    const onPointerLeave = () => {
+      lastPointer = null
+    }
+
+    window.addEventListener(BALL_EVENT, onThrow)
+    bar.current?.addEventListener('pointermove', onPointerMove)
+    bar.current?.addEventListener('pointerleave', onPointerLeave)
+
+    const barNode = bar.current
+
+    if (prefersReducedMotion()) {
+      place()
+
+      return () => {
+        observer.disconnect()
+        window.removeEventListener(BALL_EVENT, onThrow)
+        barNode?.removeEventListener('pointermove', onPointerMove)
+        barNode?.removeEventListener('pointerleave', onPointerLeave)
+      }
+    }
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000)
+
+      last = now
+      x = Math.min(Math.max(x, lane.left), Math.max(lane.left, lane.right))
+
+      const bounds = ballBounds()
+
+      for (const ball of balls) Object.assign(ball, stepBall(ball, bounds, dt))
+
+      // A rolling ball moves the goal; the pet turns to follow it.
+      if (mode === 'run' && chasing) {
+        target = chasing.x - spriteWidth() / 2
+
+        if (Math.abs(target - x) > 2) facing = target >= x ? 1 : -1
+      }
+
+      if (mode === 'walk' || mode === 'run') {
+        const step = (mode === 'run' ? PET_RUN_SPEED : PET_SPEED) * dt
+        const gap = target - x
+        // It catches a ball only near the floor, not one flying overhead.
+        const isCatchable = mode !== 'run' || !chasing || chasing.y >= lane.floor - 8
+
+        if (Math.abs(gap) <= step + (mode === 'run' ? 2 : 0) && isCatchable) {
+          x = target
+
+          if (mode === 'run') {
+            if (chasing) balls.splice(balls.indexOf(chasing), 1)
+
+            chasing = null
+            become('play')
+            // A short play while more balls wait, a longer one after the last.
+            until = now + (balls.length ? 900 : 2500 + Math.random() * 1500)
+          } else {
+            const lies = !!pet.lie && Math.random() < 0.3
+
+            become(lies ? 'lie' : 'idle')
+            until = now + (lies ? 5000 + Math.random() * 6000 : 1500 + Math.random() * 3500)
+          }
+        } else {
+          // Under a ball still in the air, it waits instead of overshooting.
+          x = Math.abs(gap) <= step ? target : x + Math.sign(gap) * step
+        }
+      } else if (now >= until && !chaseNext()) {
+        target = lane.left + Math.max(0, lane.right - lane.left) * Math.random()
+        facing = target >= x ? 1 : -1
+        become('walk')
+      }
+
+      place()
+      frame = requestAnimationFrame(tick)
+    }
+
+    frame = requestAnimationFrame(tick)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener(BALL_EVENT, onThrow)
+      barNode?.removeEventListener('pointermove', onPointerMove)
+      barNode?.removeEventListener('pointerleave', onPointerLeave)
+    }
+  }, [pet, bar, title, status])
+
+  return (
+    <div className="pet-lane" aria-hidden="true">
+      {Array.from({ length: MAX_BALLS }, (_, at) => (
+        <span
+          key={at}
+          ref={node => {
+            ballNodes.current[at] = node
+          }}
+          className="pet-ball"
+        />
+      ))}
+      <img
+        ref={sprite}
+        className="pet"
+        src={`/api/pet/${pathOf(action)}`}
+        alt=""
+        width={pet.size}
+        style={{ width: pet.size }}
+        data-tooltip={`${pet.credit}. Click the empty bar to throw it balls, up to five at a time.`}
+        draggable={false}
+      />
+    </div>
+  )
+}
+
+// A click on the bar itself, not on its title, status or buttons, throws the
+// pet a ball where it landed.
+const throwBall = (event: ReactMouseEvent<HTMLDivElement>) => {
+  const barNode = event.currentTarget
+
+  if (event.target !== barNode && !(event.target as Element).classList.contains('pet-lane')) return
+
+  const box = barNode.getBoundingClientRect()
+
+  window.dispatchEvent(new CustomEvent(BALL_EVENT, { detail: { x: event.clientX - box.left, y: event.clientY - box.top } }))
 }
 
 const closeWindow = async () => {
@@ -198,26 +574,31 @@ const toggleMaximized = async () => {
 // A title bar in the manner of a desktop window: the console's name on the left,
 // the battery, the time, and maximize and close buttons on the right.
 const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
-  const battery = useBattery()
+  const { battery, disk, pet } = useSystem()
+  const bar = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const statusRef = useRef<HTMLDivElement>(null)
   const now = useClock()
   const isMaximized = useIsMaximized()
   const [windowError, setWindowError] = useState('')
   const date = new Date(now)
 
   return (
-    <div className="window-bar">
-      <h1 className="win-title">
+    <div className="window-bar" ref={bar} onClick={pet ? throwBall : undefined} data-has-pet={pet ? true : undefined}>
+      {pet && <WalkingPet pet={pet} bar={bar} title={titleRef} status={statusRef} />}
+      <h1 className="win-title" ref={titleRef}>
         {hasIcon && <img className="brand-mark" src="/api/brand-icon" alt="" width={18} height={18} />}
         {title}
       </h1>
-      <div className="win-status">
+      <div className="win-status" ref={statusRef}>
         {windowError && (
           <span className="win-error" role="alert">
             {windowError}
           </span>
         )}
+        {disk && (disk.scannedAt > 0 || disk.isScanning) && <WorktreeDisk usage={disk} />}
         {battery && <BatteryMeter battery={battery} />}
-        <time className="win-clock" dateTime={date.toISOString()} title={date.toLocaleString()}>
+        <time className="win-clock" dateTime={date.toISOString()} data-tooltip={date.toLocaleString()}>
           <span className="win-date">{date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} </span>
           <strong>{date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong>
         </time>
@@ -225,7 +606,7 @@ const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
           type="button"
           className="win-button"
           aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
-          title={isMaximized ? 'Restore window' : 'Maximize window'}
+          data-tooltip={isMaximized ? 'Restore window' : 'Maximize window'}
           onClick={() => {
             setWindowError('')
             toggleMaximized().catch((error: unknown) =>
@@ -248,7 +629,7 @@ const WindowBar = ({ title, hasIcon }: { title: string; hasIcon: boolean }) => {
           type="button"
           className="win-button win-close"
           aria-label="Close window"
-          title="Close window"
+          data-tooltip="Close window"
           onClick={() => {
             setWindowError('')
             closeWindow().catch((error: unknown) =>
@@ -460,7 +841,7 @@ const ActivityStrip = ({ days }: { days: number[] }) => {
             key={i}
             className="strip-day"
             data-level={level}
-            title={`${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${count}`}
+            data-tooltip={`${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${count}`}
           />
         )
       })}
@@ -512,7 +893,7 @@ const terminalAction = (label: string, dir: string, session?: string): MenuActio
 
 // Starts a new Claude Code session in a new terminal tab: an empty one in a
 // worktree, or the configured one in the repository.
-const startSession = async (body: { dir?: string; input?: string }): Promise<true | string> => {
+const startSession = async (body: { dir?: string; input?: string; env?: string }): Promise<true | string> => {
   const response = await fetch('/api/session/new', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
@@ -683,6 +1064,7 @@ const ConfirmHost = () => {
 }
 
 const INPUT_PATTERN = /^[A-Za-z0-9._-]{1,80}$/
+const PR_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/
 
 // The "+" beside the session search. It opens a modal that says what will be
 // created, asks for a ticket or a name when the configured first message needs
@@ -706,9 +1088,14 @@ const NewSessionButton = ({
   const [error, setError] = useState('')
   const [isStarting, setIsStarting] = useState(false)
   const [note, setNote] = useState('')
+  const [env, setEnv] = useState('')
   const value = input.trim()
-  const isValid = !setup.needsInput || INPUT_PATTERN.test(value)
-  const prompt = setup.prompt.replaceAll('{input}', value || `<${setup.inputLabel.toLowerCase()}>`)
+  const isValid = !setup.needsInput || INPUT_PATTERN.test(value) || PR_URL_PATTERN.test(value)
+  const prompt = setup.prompt
+    .replaceAll('{input}', value || `<${setup.inputLabel.toLowerCase()}>`)
+    .replaceAll('{env}', env)
+    .replace(/\s+/g, ' ')
+    .trim()
 
   useEffect(() => {
     if (!note) return
@@ -721,6 +1108,7 @@ const NewSessionButton = ({
   const close = () => {
     setIsOpen(false)
     setInput(initialInput)
+    setEnv('')
     setError('')
   }
 
@@ -729,7 +1117,7 @@ const NewSessionButton = ({
 
     setIsStarting(true)
 
-    const outcome = await startSession(setup.needsInput ? { input: value } : {})
+    const outcome = await startSession({ ...(setup.needsInput ? { input: value } : {}), ...(env ? { env } : {}) })
 
     setIsStarting(false)
 
@@ -752,7 +1140,7 @@ const NewSessionButton = ({
         type="button"
         className="icon-button"
         aria-label={label}
-        title={label}
+        data-tooltip={label}
         aria-haspopup="dialog"
         onClick={() => {
           setInput(initialInput)
@@ -803,9 +1191,33 @@ const NewSessionButton = ({
                   autoComplete="off"
                 />
                 <span id="new-session-hint" className="modal-hint">
-                  Letters, numbers, <code>.</code> <code>-</code> <code>_</code>, such as <code>LPD-12345</code>.
+                  A ticket or a name (letters, numbers, <code>.</code> <code>-</code> <code>_</code>), such as{' '}
+                  <code>LPD-12345</code>, or a GitHub pull request link.
                 </span>
               </label>
+            )}
+            {setup.environments.length > 0 && (
+              <fieldset className="modal-field modal-choice">
+                <legend>Frontend dev server</legend>
+                <div className="segmented" role="radiogroup" aria-label="Frontend dev server">
+                  {[{ label: 'None', value: '' }, ...setup.environments].map(option => (
+                    <button
+                      key={option.value || 'none'}
+                      type="button"
+                      role="radio"
+                      aria-checked={env === option.value}
+                      onClick={() => setEnv(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="modal-hint">
+                  {env
+                    ? `Starts the dev server against ${setup.environments.find(e => e.value === env)?.label}.`
+                    : 'No dev server: the session starts without one.'}
+                </span>
+              </fieldset>
             )}
             <dl className="modal-preview">
               <dt>Folder</dt>
@@ -915,7 +1327,7 @@ const ActionMenu = ({ label, actions }: { label: string; actions: MenuAction[] }
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-label={label}
-        title={label}
+        data-tooltip={label}
         onClick={() => setIsOpen(v => !v)}
         onKeyDown={event => {
           if (event.key === 'ArrowDown' && !isOpen) {
@@ -954,6 +1366,226 @@ const ActionMenu = ({ label, actions }: { label: string; actions: MenuAction[] }
   )
 }
 
+// The starred sessions' ids, newest first: set from each snapshot and right
+// after a star is added or taken away, so the change shows at once.
+let favoriteIds: string[] = []
+let favoritesChangedAt = 0
+const favoriteListeners = new Set<() => void>()
+
+const setFavoriteIds = (ids: string[]) => {
+  favoriteIds = ids
+  favoriteListeners.forEach(listener => listener())
+}
+
+// A snapshot taken before the last local change would undo it, so it is ignored.
+const syncFavorites = (ids: string[], generatedAt: number) => {
+  if (generatedAt < favoritesChangedAt || ids.join() === favoriteIds.join()) return
+
+  setFavoriteIds(ids)
+}
+
+const useFavorites = () =>
+  useSyncExternalStore(
+    listener => {
+      favoriteListeners.add(listener)
+
+      return () => favoriteListeners.delete(listener)
+    },
+    () => favoriteIds,
+  )
+
+const setFavorite = async (session: Session, isFavorite: boolean) => {
+  const response = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ session: session.id, isFavorite }),
+  }).catch(() => null)
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { favorites?: string[]; error?: string }
+
+  if (!response?.ok || !body.favorites) {
+    await showNotice(
+      isFavorite ? 'Not added to favorites' : 'Not removed from favorites',
+      <p className="modal-text">{body.error ?? 'The console did not answer.'}</p>,
+    )
+
+    return false
+  }
+
+  favoritesChangedAt = Date.now()
+  setFavoriteIds(body.favorites)
+
+  return true
+}
+
+const confirmUnfavorite = async (session: Session) => {
+  const isSure = await askConfirm({
+    title: 'Remove from favorites?',
+    body: (
+      <p className="modal-text">
+        <strong>{session.name || 'This session'}</strong> leaves your favorites. The session itself and its conversation
+        stay as they are.
+      </p>
+    ),
+    confirmLabel: 'Remove',
+  })
+
+  if (isSure) await setFavorite(session, false)
+}
+
+// The names given in the console, by session id: set from each snapshot and
+// right after a rename, so the new name shows at once.
+let sessionNames: Record<string, string> = {}
+let namesChangedAt = 0
+const nameListeners = new Set<() => void>()
+
+const setSessionNames = (names: Record<string, string>) => {
+  sessionNames = names
+  nameListeners.forEach(listener => listener())
+}
+
+const syncNames = (names: Record<string, string>, generatedAt: number) => {
+  if (generatedAt < namesChangedAt || JSON.stringify(names) === JSON.stringify(sessionNames)) return
+
+  setSessionNames(names)
+}
+
+const useSessionNames = () =>
+  useSyncExternalStore(
+    listener => {
+      nameListeners.add(listener)
+
+      return () => nameListeners.delete(listener)
+    },
+    () => sessionNames,
+  )
+
+const saveSessionName = async (id: string, name: string) => {
+  const previous = sessionNames
+  const next = { ...sessionNames }
+
+  if (name) next[id] = name
+  else delete next[id]
+
+  namesChangedAt = Date.now()
+  setSessionNames(next)
+
+  const response = await fetch('/api/session/name', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ session: id, name }),
+  }).catch(() => null)
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { names?: Record<string, string>; error?: string }
+
+  if (response?.ok && body.names) {
+    namesChangedAt = Date.now()
+    setSessionNames(body.names)
+
+    return
+  }
+
+  setSessionNames(previous)
+  await showNotice('The session was not renamed', <p className="modal-text">{body.error ?? 'The console did not answer.'}</p>)
+}
+
+// A session's title that turns into a field on click. Enter or a click
+// outside keeps the new name, Escape drops it, and an empty name (or Claude
+// Code's own) goes back to the name Claude Code knows.
+const SessionTitle = ({ session }: { session: Session }) => {
+  const names = useSessionNames()
+  const claudeName = session.claudeName ?? session.name
+  const given = names[session.id]
+  const shown = given ?? claudeName
+  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const isCancelled = useRef(false)
+  const field = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isEditing) return
+
+    field.current?.focus()
+    field.current?.select()
+  }, [isEditing])
+
+  const finish = () => {
+    setIsEditing(false)
+
+    if (isCancelled.current) return
+
+    const next = draft.replace(/\s+/g, ' ').trim()
+
+    if (next === shown) return
+
+    void saveSessionName(session.id, next === claudeName ? '' : next)
+  }
+
+  if (isEditing) {
+    return (
+      <input
+        ref={field}
+        className="session-name-field"
+        value={draft}
+        maxLength={120}
+        aria-label="Session name"
+        placeholder={claudeName || 'Session name'}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={finish}
+        onKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            field.current?.blur()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            isCancelled.current = true
+            field.current?.blur()
+          }
+        }}
+      />
+    )
+  }
+
+  const isEmpty = !shown && session.responses === 0
+
+  return (
+    <button
+      type="button"
+      className="session-name"
+      data-auto={!given && session.isAutoTitle}
+      data-empty={isEmpty}
+      data-given={!!given || undefined}
+      data-tooltip={
+        given
+          ? `Named in the console${claudeName ? `; Claude Code calls it "${claudeName}"` : ''}. Click to rename.`
+          : session.isAutoTitle
+            ? 'Title Claude generated. Click to rename it here, or use /rename in the session.'
+            : isEmpty
+              ? 'Opened and closed without a conversation'
+              : 'Click to rename'
+      }
+      onClick={() => {
+        isCancelled.current = false
+        setDraft(shown)
+        setIsEditing(true)
+      }}
+    >
+      {shown || (session.responses === 0 ? 'Empty session' : 'Untitled session')}
+    </button>
+  )
+}
+
+const StarIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+    <path
+      d="M8 1.4l1.95 4.1 4.45.55-3.27 3.08.84 4.42L8 11.4l-3.97 2.15.84-4.42L1.6 6.05l4.45-.55z"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="0.8"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
 const sessionActions = (session: Session, tree: Worktree | undefined): MenuAction[] => {
   const command = session.resumeDir ? resumeCommand(session) : ''
   const actions: MenuAction[] = [
@@ -983,6 +1615,51 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   }
 
   actions.push(copyAction('Copy session id', session.id))
+
+  if (session.remoteUrl) {
+    actions.push({
+      label: 'Open in Remote Control',
+      run: async () => ((await openUrl(session.remoteUrl)) ? 'Opened' : 'Could not open'),
+    })
+  } else if (session.isRunning) {
+    actions.push({
+      label: 'Enable Remote Control…',
+      run: async () => {
+        const wantsCopy = await askConfirm({
+          title: 'Turn on Remote Control',
+          body: (
+            <>
+              <p className="modal-text">
+                Remote Control lets you continue <strong>{session.name || 'this session'}</strong> on claude.ai or in the
+                Claude app, while it keeps running here.
+              </p>
+              <p className="modal-text">
+                A running session turns it on from inside: type <code>/remote-control</code> in its terminal. The console
+                shows it as on as soon as it is.
+              </p>
+            </>
+          ),
+          confirmLabel: 'Copy /remote-control',
+        })
+
+        if (!wantsCopy) return ''
+
+        return (await copy('/remote-control')) ? 'Copied' : 'Copy failed'
+      },
+    })
+  } else if (session.resumeDir) {
+    actions.push({
+      label: 'Resume with Remote Control',
+      run: async () =>
+        (await openTab(session.resumeDir, session.id, true).catch(() => false)) ? 'Opened in the terminal' : 'Could not open the terminal',
+    })
+  }
+
+  actions.push(
+    favoriteIds.includes(session.id)
+      ? { label: 'Remove from favorites', run: async () => ((await setFavorite(session, false)) ? 'Removed' : '') }
+      : { label: 'Add to favorites', run: async () => ((await setFavorite(session, true)) ? 'Added to favorites' : '') },
+  )
 
   if (session.isRunning) {
     actions.push({
@@ -1033,6 +1710,31 @@ const sessionActions = (session: Session, tree: Worktree | undefined): MenuActio
   }
 
   return actions
+}
+
+// Deletes a worktree, marking its row while git works. On success the row stays
+// marked until the next snapshot drops it.
+const removeWorktree = async (path: string, force: boolean) => {
+  setDeleting(path, true)
+
+  const response = await fetch('/api/worktree/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+    body: JSON.stringify({ path, force }),
+  }).catch(() => null)
+
+  if (response?.ok) {
+    window.dispatchEvent(new Event('claude-console:refresh'))
+    setTimeout(() => setDeleting(path, false), 30_000)
+
+    return { ok: true, error: '', canForce: false }
+  }
+
+  setDeleting(path, false)
+
+  const body = ((await response?.json().catch(() => null)) ?? {}) as { error?: string; canForce?: boolean }
+
+  return { ok: false, error: body.error ?? 'The console did not answer.', canForce: !!body.canForce }
 }
 
 // The worktrees being deleted right now, shared by the menu action that starts
@@ -1118,29 +1820,38 @@ const worktreeActions = (worktree: Worktree): MenuAction[] => {
 
         if (!isSure) return ''
 
-        setDeleting(worktree.path, true)
+        let outcome = await removeWorktree(worktree.path, false)
 
-        const response = await fetch('/api/worktree/remove', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
-          body: JSON.stringify({ path: worktree.path }),
-        }).catch(() => null)
+        if (!outcome.ok && outcome.canForce) {
+          const isForced = await askConfirm({
+            title: 'The worktree was not deleted',
+            body: (
+              <>
+                <p className="modal-text">{outcome.error}</p>
+                <p className="modal-text">
+                  <strong>Force delete</strong> removes the folder anyway, and its uncommitted changes and untracked files
+                  are lost for good.
+                  {worktree.branch && (
+                    <>
+                      {' '}
+                      The branch <code>{worktree.branch}</code> and its commits stay.
+                    </>
+                  )}
+                </p>
+              </>
+            ),
+            confirmLabel: 'Force delete',
+            isDanger: true,
+          })
 
-        if (response?.ok) {
-          // The row leaves with the next snapshot; until then it stays marked.
-          window.dispatchEvent(new Event('claude-console:refresh'))
-          setTimeout(() => setDeleting(worktree.path, false), 30_000)
+          if (!isForced) return 'Not deleted'
 
-          return 'Deleted'
+          outcome = await removeWorktree(worktree.path, true)
         }
 
-        setDeleting(worktree.path, false)
+        if (outcome.ok) return 'Deleted'
 
-        const { error } = ((await response?.json().catch(() => null)) ?? { error: 'The console did not answer.' }) as {
-          error?: string
-        }
-
-        await showNotice('The worktree was not deleted', <p className="modal-text">{error ?? 'Unknown error'}</p>)
+        await showNotice('The worktree was not deleted', <p className="modal-text">{outcome.error}</p>)
 
         return 'Not deleted'
       },
@@ -1161,7 +1872,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         <a
           className="wt-name"
           href={`ghosttycd://${worktree.path}`}
-          title={`Open ${worktree.path} in the terminal`}
+          data-tooltip={`Open ${worktree.path} in the terminal`}
           tabIndex={isDeleting ? -1 : undefined}
         >
           {worktree.name}
@@ -1174,7 +1885,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
         </span>
       </span>
       <ActivityStrip days={worktree.activityDays} />
-      <span className="wt-touched" title={new Date(worktree.lastTouchedAt).toLocaleString()}>
+      <span className="wt-touched" data-tooltip={new Date(worktree.lastTouchedAt).toLocaleString()}>
         {ago(worktree.lastTouchedAt, now)}
       </span>
       {isDeleting ? (
@@ -1195,7 +1906,7 @@ const WorktreeRow = ({ worktree, now }: { worktree: Worktree; now: number }) => 
             </span>
           )}
           {live.length > 0 && (
-            <span className="tag tag-session" title={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
+            <span className="tag tag-session" data-tooltip={live.map(s => `${s.name} · ctx ${s.ctx}%`).join('\n')}>
               {live.length === 1 ? 'Claude' : `Claude ×${live.length}`}
             </span>
           )}
@@ -1216,9 +1927,12 @@ const FILTERS: Array<{ id: Activity; label: string; hint: string }> = [
   { id: 'dormant', label: 'Dormant', hint: 'untouched for more than 14 days: prune candidates' },
 ]
 
+const WORKTREE_PAGE = 5
+
 const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) => {
   const [filter, setFilter] = useState<Activity | 'all'>('active')
   const [query, setQuery] = useState('')
+  const [showAll, setShowAll] = useState(false)
   const counts = useMemo(
     () => Object.fromEntries(FILTERS.map(f => [f.id, worktrees.filter(w => w.activity === f.id).length])),
     [worktrees],
@@ -1227,6 +1941,13 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
     .filter(w => filter === 'all' || w.activity === filter)
     .filter(w => !query || `${w.name} ${w.repoName} ${w.branch} ${w.subject}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)
+  // The five most recently touched, unless searching or asked for all.
+  const visible = showAll || query ? shown : shown.slice(0, WORKTREE_PAGE)
+
+  const choose = (next: Activity | 'all') => {
+    setFilter(next)
+    setShowAll(false)
+  }
 
   return (
     <section className="panel worktrees" aria-labelledby="worktrees-title">
@@ -1240,13 +1961,13 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
               role="tab"
               aria-selected={filter === f.id}
               data-activity={f.id}
-              title={f.hint}
-              onClick={() => setFilter(f.id)}
+              data-tooltip={f.hint}
+              onClick={() => choose(f.id)}
             >
               {f.label} <span className="count">{counts[f.id]}</span>
             </button>
           ))}
-          <button type="button" role="tab" aria-selected={filter === 'all'} onClick={() => setFilter('all')}>
+          <button type="button" role="tab" aria-selected={filter === 'all'} onClick={() => choose('all')}>
             All <span className="count">{worktrees.length}</span>
           </button>
         </div>
@@ -1264,11 +1985,18 @@ const Worktrees = ({ worktrees, now }: { worktrees: Worktree[]; now: number }) =
           {query ? 'No worktree matches that filter.' : 'Nothing here. Switch the filter to see the rest.'}
         </p>
       ) : (
-        <ul className="wt-list">
-          {shown.map(w => (
-            <WorktreeRow key={w.path} worktree={w} now={now} />
-          ))}
-        </ul>
+        <>
+          <ul className="wt-list">
+            {visible.map(w => (
+              <WorktreeRow key={w.path} worktree={w} now={now} />
+            ))}
+          </ul>
+          {!query && shown.length > WORKTREE_PAGE && (
+            <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+              {showAll ? 'Show only the 5 most recent' : `Show ${shown.length - WORKTREE_PAGE} more`}
+            </button>
+          )}
+        </>
       )}
       {filter === 'dormant' && shown.length > 0 && (
         <p className="note">
@@ -1313,7 +2041,7 @@ const SessionLabels = ({ linked: unsorted }: { linked: Session[] }) => {
           type="button"
           className="tag tag-session session-link"
           data-status={session.isRunning ? session.runStatus : 'ended'}
-          title={`Show the session ${session.name || session.id}`}
+          data-tooltip={`Show the session ${session.name || session.id}`}
           onClick={() => window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail: session.id }))}
         >
           Claude: {session.name || 'Untitled session'}
@@ -1330,11 +2058,39 @@ const PrSessions = ({ pr, sessions }: { pr: PullRequest; sessions: Session[] }) 
   <SessionLabels linked={sessions.filter(session => prBelongsTo(pr, session))} />
 )
 
-const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: Session[] }) => {
+// Whether a pull request belongs to the watched repository or one of its forks,
+// judged by the repository's name: only then can a worktree check out its branch.
+const isSameProject = (prRepo: string, repoPath: string) =>
+  prRepo.split('/')[1]?.toLowerCase() === repoPath.split('/').filter(Boolean).pop()?.toLowerCase()
+
+const PrRow = ({
+  pr,
+  now,
+  sessions,
+  setup,
+  repo,
+  showAuthor = false,
+}: {
+  pr: PullRequest
+  now: number
+  sessions: Session[]
+  setup: Snapshot['features']['newSession']
+  repo: string
+  showAuthor?: boolean
+}) => {
   const failing = pr.checks.filter(c => c.state === 'failure')
 
   return (
     <li className="pr" data-ci={pr.ci}>
+      {setup.needsInput && !pr.worktreePath && isSameProject(pr.repo, repo) && (
+        <NewSessionButton
+          setup={setup}
+          repo={repo}
+          initialInput={pr.url}
+          label={`Set up a worktree for ${pr.repo}#${pr.number}`}
+          isSmall
+        />
+      )}
       {pr.ci !== 'none' && <span className="pr-ci">{CI_LABEL[pr.ci]}</span>}
       <a className="pr-title" href={pr.url}>
         {pr.title}
@@ -1343,6 +2099,7 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
         <span>
           {pr.repo}#{pr.number}
         </span>
+        {showAuthor && pr.author && <span className="pr-author">by {pr.author}</span>}
         {pr.isDraft && <span className="tag">Draft</span>}
         {REVIEW_LABEL[pr.reviewDecision] && (
           <span className="tag" data-review={pr.reviewDecision}>
@@ -1357,7 +2114,7 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
       <code className="pr-branch">
         {pr.branch}
         {pr.worktreePath && (
-          <a className="pr-wt" href={`ghosttycd://${pr.worktreePath}`} title={pr.worktreePath}>
+          <a className="pr-wt" href={`ghosttycd://${pr.worktreePath}`} data-tooltip={pr.worktreePath}>
             has a worktree
           </a>
         )}
@@ -1378,9 +2135,27 @@ const PrRow = ({ pr, now, sessions }: { pr: PullRequest; now: number; sessions: 
   )
 }
 
-const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number; sessions: Session[] }) => {
+type PrTab = 'mine' | 'assigned'
+
+const PullRequests = ({
+  prs,
+  assigned,
+  now,
+  sessions,
+  setup,
+  repo,
+}: {
+  prs: PullRequest[]
+  assigned: PullRequest[]
+  now: number
+  sessions: Session[]
+  setup: Snapshot['features']['newSession']
+  repo: string
+}) => {
+  const [tab, setTab] = useState<PrTab>('mine')
   const [showStale, setShowStale] = useState(false)
-  const all = [...prs].sort(
+  const list = tab === 'mine' ? prs : assigned
+  const all = [...list].sort(
     (a, b) =>
       ['failing', 'running', 'passing', 'none'].indexOf(a.ci) - ['failing', 'running', 'passing', 'none'].indexOf(b.ci) ||
       b.updatedAt - a.updatedAt,
@@ -1388,22 +2163,41 @@ const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number;
 
   const ordered = all.filter(pr => now - pr.updatedAt < STALE_MS)
   const stale = all.filter(pr => now - pr.updatedAt >= STALE_MS)
+  const row = (pr: PullRequest) => (
+    <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} setup={setup} repo={repo} showAuthor={tab === 'assigned'} />
+  )
 
   return (
     <section className="panel prs" aria-labelledby="prs-title">
       <header className="panel-head">
         <h2 id="prs-title">Open pull requests</h2>
+        <div className="filters" role="tablist" aria-label="Pull requests">
+          {(['mine', 'assigned'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              data-tooltip={option === 'assigned' ? 'Assigned to you, or asking for your review' : 'Opened by you'}
+              onClick={() => {
+                setTab(option)
+                setShowStale(false)
+              }}
+            >
+              {option === 'mine' ? 'Mine' : 'Assigned to me'}
+              <span className="count"> {(option === 'mine' ? prs : assigned).length}</span>
+            </button>
+          ))}
+        </div>
       </header>
-      {prs.length === 0 ? (
-        <p className="empty">You have no open pull requests.</p>
+      {list.length === 0 ? (
+        <p className="empty">
+          {tab === 'mine' ? 'You have no open pull requests.' : 'No open pull request is assigned to you or asks for your review.'}
+        </p>
       ) : ordered.length === 0 ? (
         <p className="empty">Nothing moved in the last 30 days.</p>
       ) : (
-        <ul className="pr-list">
-          {ordered.map(pr => (
-            <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} />
-          ))}
-        </ul>
+        <ul className="pr-list">{ordered.map(row)}</ul>
       )}
       {stale.length > 0 && (
         <>
@@ -1412,13 +2206,7 @@ const PullRequests = ({ prs, now, sessions }: { prs: PullRequest[]; now: number;
               ? 'Hide stale pull requests'
               : `Show ${stale.length} stale pull request${stale.length === 1 ? '' : 's'}, untouched for 30+ days`}
           </button>
-          {showStale && (
-            <ul className="pr-list stale">
-              {stale.map(pr => (
-                <PrRow key={pr.url} pr={pr} now={now} sessions={sessions} />
-              ))}
-            </ul>
-          )}
+          {showStale && <ul className="pr-list stale">{stale.map(row)}</ul>}
         </>
       )}
     </section>
@@ -1582,7 +2370,7 @@ const SessionCost = ({ cost }: { cost: number | null }) => {
   if (cost === null) return null
 
   return (
-    <span ref={ref} key={pop} className="session-cost" data-pop={pop > 0} title="What this session has cost so far, at API prices">
+    <span ref={ref} key={pop} className="session-cost" data-pop={pop > 0} data-tooltip="What this session has cost so far, at API prices">
       ${cost.toFixed(2)}
     </span>
   )
@@ -1627,7 +2415,7 @@ const RecapButton = ({ recap, recapAt, now }: { recap: string; recapAt: number; 
         aria-expanded={isOpen}
         aria-controls={id}
         aria-label="Show the recap of this session"
-        title="Recap"
+        data-tooltip="Recap"
         onClick={() => setIsOpen(v => !v)}
       >
         ?
@@ -1636,7 +2424,7 @@ const RecapButton = ({ recap, recapAt, now }: { recap: string; recapAt: number; 
         <span className="recap-popover" id={id} role="dialog" aria-label="Session recap">
           <span className="recap-text">{recap}</span>
           {recapAt > 0 && (
-            <span className="recap-age" title={new Date(recapAt).toLocaleString()}>
+            <span className="recap-age" data-tooltip={new Date(recapAt).toLocaleString()}>
               Recap from {ago(recapAt, now)}
             </span>
           )}
@@ -1663,12 +2451,12 @@ const SessionPrs = ({ session, prs, queue }: { session: Session; prs: PullReques
   return (
     <span className="session-prs">
       {related.map(pr => (
-        <a key={pr.url} className="tag" data-ci={pr.ci} href={pr.url} title={`${pr.repo}#${pr.number}: ${pr.title} (${CI_LABEL[pr.ci]})`}>
+        <a key={pr.url} className="tag" data-ci={pr.ci} href={pr.url} data-tooltip={`${pr.repo}#${pr.number}: ${pr.title} (${CI_LABEL[pr.ci]})`}>
           PR #{pr.number}
         </a>
       ))}
       {waiting.map(pr => (
-        <a key={pr.url} className="tag" data-ci="passing" href={pr.url} title={`Waiting in ${queue!.name}'s queue: ${pr.title}`}>
+        <a key={pr.url} className="tag" data-ci="passing" href={pr.url} data-tooltip={`Waiting in ${queue!.name}'s queue: ${pr.title}`}>
           {queue!.name} #{pr.number}
         </a>
       ))}
@@ -1676,18 +2464,61 @@ const SessionPrs = ({ session, prs, queue }: { session: Session; prs: PullReques
   )
 }
 
+// The session's published Artifacts, behind a small orange square next to its
+// title: hovering or focusing it lists them, and the list stays open while the
+// pointer is over it, so its links can be clicked.
 const SessionArtifacts = ({ session, artifacts }: { session: Session; artifacts: PublishedArtifact[] }) => {
   const mine = artifacts.filter(artifact => artifact.sessionIds.includes(session.id))
+  const [isOpen, setIsOpen] = useState(false)
+  const closing = useRef<ReturnType<typeof setTimeout>>()
+  const id = useId()
 
   if (mine.length === 0) return null
 
+  const open = () => {
+    clearTimeout(closing.current)
+    setIsOpen(true)
+  }
+  const close = () => {
+    clearTimeout(closing.current)
+    closing.current = setTimeout(() => setIsOpen(false), 180)
+  }
+
   return (
-    <span className="session-prs">
-      {mine.map(artifact => (
-        <a key={artifact.url} className="tag tag-artifact" href={artifact.url} title={`Artifact: ${artifact.title}`}>
-          {artifact.title}
-        </a>
-      ))}
+    <span
+      className="artifact-badge"
+      onMouseEnter={open}
+      onMouseLeave={close}
+      onFocus={open}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close()
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Escape') setIsOpen(false)
+      }}
+    >
+      <button
+        type="button"
+        className="artifact-badge-button"
+        aria-label={`${plural(mine.length, 'artifact')} published from this session`}
+        aria-expanded={isOpen}
+        aria-controls={id}
+        onClick={() => setIsOpen(v => !v)}
+      >
+        <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
+          <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />
+        </svg>
+      </button>
+      {isOpen && (
+        <span className="artifact-popover" id={id} role="dialog" aria-label="Artifacts of this session">
+          <span className="artifact-popover-title">{plural(mine.length, 'artifact')}</span>
+          {mine.map(artifact => (
+            <a key={artifact.url} className="artifact-popover-link" href={artifact.url}>
+              {artifact.title}
+            </a>
+          ))}
+        </span>
+      )}
     </span>
   )
 }
@@ -1711,42 +2542,53 @@ const SessionRow = ({
 }) => {
   const current = live?.[base.id]
   const session: Session = live
-    ? { ...base, isRunning: !!current, runStatus: current?.status ?? '', runSince: current?.since ?? 0 }
+    ? { ...base, isRunning: !!current, runStatus: current?.status ?? '', runSince: current?.since ?? 0, remoteUrl: current?.remoteUrl ?? '' }
     : base
   const agents = current?.agents ?? 0
   const cost = current?.cost ?? base.cost
   const worktree = worktreeOf(session)
   const tree = worktrees.find(w => w.path === session.top)
+  const isFavorite = useFavorites().includes(session.id)
 
   return (
     <li className="session" id={`session-${session.id}`} data-live={session.isLive}>
       <span className="session-title">
-        <span
-          className="session-name"
-          data-auto={session.isAutoTitle}
-          data-empty={!session.name && session.responses === 0}
-          title={
-            session.isAutoTitle
-              ? 'Title Claude generated; rename the session with /rename'
-              : !session.name && session.responses === 0
-                ? 'Opened and closed without a conversation'
-                : undefined
-          }
-        >
-          {session.name || (session.responses === 0 ? 'Empty session' : 'Untitled session')}
-        </span>
+        <SessionTitle session={session} />
         {session.recap && <RecapButton recap={session.recap} recapAt={session.recapAt} now={now} />}
+        {session.remoteUrl && (
+          <a
+            className="remote-badge"
+            href={session.remoteUrl}
+            aria-label="Remote Control is on: open this session on claude.ai"
+            data-tooltip="Remote Control is on: continue this session on claude.ai or in the Claude app"
+          >
+            rc
+          </a>
+        )}
+        {isFavorite && (
+          <button
+            type="button"
+            className="favorite-star"
+            aria-label="Favorite; remove from favorites"
+            data-tooltip="Favorite: click to remove"
+            onClick={() => void confirmUnfavorite(session)}
+          >
+            <StarIcon />
+          </button>
+        )}
+        <SessionArtifacts session={session} artifacts={artifacts} />
       </span>
-      <span className="ctx" title={`Context ${session.ctx}% used`}>
+      <span className="ctx" data-tooltip={`Context ${session.ctx}% used`}>
         <span className="ctx-bar">
           <span className="ctx-fill" style={{ width: `${Math.min(100, session.ctx)}%` }} data-level={levelOf(session.ctx)} />
         </span>
         {session.ctx}%
         <SessionCost cost={cost} />
+        {session.model && <span className="tag model-tag">{session.model.toLowerCase()}</span>}
       </span>
       <span className="session-foot">
         {worktree.name && (
-          <span className="session-worktree" title={session.dir || session.top}>
+          <span className="session-worktree" data-tooltip={session.dir || session.top}>
             <span className="session-worktree-label">in</span>{' '}
             <a href={`ghosttycd://${session.top}`}>{worktree.name}</a>
             {worktree.inside && <span className="session-worktree-inside"> › {worktree.inside}</span>}
@@ -1755,19 +2597,16 @@ const SessionRow = ({
         )}
         <TicketChip text={session.branch} />
         <SessionPrs session={session} prs={prs} queue={queue} />
-        <SessionArtifacts session={session} artifacts={artifacts} />
         <span className="session-seen" data-status={session.isRunning ? session.runStatus : undefined}>
           {session.isRunning && session.runStatus === 'busy' ? (
             <Thinking sessionId={session.id} since={session.runSince} />
           ) : session.isRunning ? (
-            [RUN_STATUS[session.runStatus] ?? 'Running', session.model].filter(Boolean).join(', ')
-          ) : session.isLive ? (
-            session.model
+            RUN_STATUS[session.runStatus] ?? 'Running'
           ) : (
             ago(session.seenAt, now)
           )}
           {agents > 0 && (
-            <span className="agents" title={`${plural(agents, 'subagent')} of this session still working`}>
+            <span className="agents" data-tooltip={`${plural(agents, 'subagent')} of this session still working`}>
               {plural(agents, 'agent')}
             </span>
           )}
@@ -1780,6 +2619,18 @@ const SessionRow = ({
   )
 }
 
+type SessionTab = 'all' | 'favorites'
+
+const SESSION_TAB_KEY = 'claude-console:sessions-tab'
+
+const readSessionTab = (): SessionTab => {
+  try {
+    return localStorage.getItem(SESSION_TAB_KEY) === 'favorites' ? 'favorites' : 'all'
+  } catch {
+    return 'all'
+  }
+}
+
 const Sessions = ({
   sessions,
   now,
@@ -1789,7 +2640,9 @@ const Sessions = ({
   artifacts,
   newSession,
   repo,
+  favoriteSessions,
 }: {
+  favoriteSessions: Session[]
   sessions: Session[]
   now: number
   worktrees: Worktree[]
@@ -1822,8 +2675,10 @@ const Sessions = ({
 
       if (reveal(id)) return
 
-      // Hidden by the search or among the earlier sessions: show them, then retry.
+      // Hidden by the search, the Favorites tab or among the earlier sessions:
+      // show them, then retry.
       setQuery('')
+      setTab('all')
       setShowAll(true)
       requestAnimationFrame(() => requestAnimationFrame(() => reveal(id)))
     }
@@ -1834,8 +2689,27 @@ const Sessions = ({
   }, [])
   const [showAll, setShowAll] = useState(false)
   const [query, setQuery] = useState('')
+  const [tab, setTab] = useState<SessionTab>(readSessionTab)
+  const favorites = useFavorites()
+  const starred = favorites
+    .map(id => sessions.find(s => s.id === id) ?? favoriteSessions.find(s => s.id === id))
+    .filter((s): s is Session => !!s)
   const isSearching = query.trim() !== ''
   const matching = sessions.filter(s => sessionMatches(s, query))
+
+  const chooseTab = (next: SessionTab) => {
+    setTab(next)
+
+    try {
+      localStorage.setItem(SESSION_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }
+
+  const row = (s: Session) => (
+    <SessionRow key={s.id} session={s} now={now} worktrees={worktrees} live={liveStatus} prs={prs} queue={queue} artifacts={artifacts} />
+  )
   const live = matching.filter(s => s.isLive)
   const rest = matching.filter(s => !s.isLive)
 
@@ -1843,6 +2717,21 @@ const Sessions = ({
     <section className="panel sessions" aria-labelledby="sessions-title">
       <header className="panel-head">
         <h2 id="sessions-title">Claude sessions</h2>
+        <div className="filters" role="tablist" aria-label="Sessions">
+          {(['all', 'favorites'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              aria-controls="sessions-tabpanel"
+              onClick={() => chooseTab(option)}
+            >
+              {option === 'all' ? 'Recent' : 'Favorites'}
+              {option === 'favorites' && <span className="count"> {starred.length}</span>}
+            </button>
+          ))}
+        </div>
         <input
           className="search"
           type="search"
@@ -1853,7 +2742,20 @@ const Sessions = ({
         />
         <NewSessionButton setup={newSession} repo={repo} />
       </header>
-      {isSearching ? (
+      <div id="sessions-tabpanel" role="tabpanel">
+      {tab === 'favorites' ? (
+        (() => {
+          const shown = starred.filter(s => sessionMatches(s, query))
+
+          return starred.length === 0 ? (
+            <p className="empty">No favorite yet. Star a session with Add to favorites in its ⋮ menu.</p>
+          ) : shown.length === 0 ? (
+            <p className="empty">No favorite matches that filter.</p>
+          ) : (
+            <ul className="session-list">{shown.map(row)}</ul>
+          )
+        })()
+      ) : isSearching ? (
         matching.length === 0 ? (
           <p className="empty">No session from the last day matches that filter.</p>
         ) : (
@@ -1915,6 +2817,7 @@ const Sessions = ({
           })()}
         </>
       )}
+      </div>
     </section>
   )
 }
@@ -1931,32 +2834,35 @@ const readJiraView = (): JiraView => {
   }
 }
 
-type Links = { tree?: Worktree; pr?: PullRequest; running: Session[] }
+type Links = { trees: Worktree[]; pr?: PullRequest; sessions: Session[] }
 
-const linksOf = (issue: JiraIssue, worktrees: Worktree[], prs: PullRequest[], sessions: Session[]): Links => ({
-  tree: worktrees.find(w => w.branch && mentions(w.branch, issue.key)),
-  pr: prs.find(p => mentions(p.branch, issue.key) || mentions(p.title, issue.key)),
-  running: sessions.filter(x => x.isRunning && mentions(x.branch, issue.key)),
-})
+// What already exists for a ticket: every worktree whose branch names it, the
+// pull request about it, and the Claude sessions on those branches, running or
+// recent. A ticket with a worktree gets these instead of a set-up button.
+const linksOf = (issue: JiraIssue, worktrees: Worktree[], prs: PullRequest[], sessions: Session[]): Links => {
+  const trees = worktrees.filter(w => w.branch && mentions(w.branch, issue.key))
+
+  return {
+    trees,
+    pr: prs.find(p => mentions(p.branch, issue.key) || mentions(p.title, issue.key)),
+    sessions: sessions.filter(x => mentions(x.branch, issue.key) || trees.some(w => w.path === x.top)),
+  }
+}
 
 const IssueLinks = ({ links }: { links: Links }) => (
   <>
-    {links.tree && (
-      <a className="tag" href={`ghosttycd://${links.tree.path}`} title={links.tree.path}>
-        {links.tree.name}
+    {links.trees.map(tree => (
+      <a key={tree.path} className="tag tag-worktree" href={`ghosttycd://${tree.path}`} data-tooltip={`Open ${tree.path} in the terminal`}>
+        {tree.name}
       </a>
-    )}
+    ))}
     {links.pr && (
       <a className="tag" data-ci={links.pr.ci} href={links.pr.url}>
         PR #{links.pr.number}
         {links.pr.ci !== 'none' && `, ${CI_LABEL[links.pr.ci]}`}
       </a>
     )}
-    {links.running.length > 0 && (
-      <span className="tag tag-session">
-        {links.running.length === 1 ? 'Claude' : `Claude ×${links.running.length}`}
-      </span>
-    )}
+    <SessionLabels linked={links.sessions} />
   </>
 )
 
@@ -1985,9 +2891,9 @@ const JiraTickets = ({
   // configured, otherwise from the configured first message with the ticket's
   // key filled in.
   const setupFor = (issue: JiraIssue, links: Links) =>
-    startWork && !links.tree ? (
+    startWork && links.trees.length === 0 ? (
       <StartWorkButton issueKey={issue.key} repos={startWork.repos} isSmall />
-    ) : newSession.needsInput && !links.tree ? (
+    ) : newSession.needsInput && links.trees.length === 0 ? (
       <NewSessionButton
         setup={newSession}
         repo={repo}
@@ -2062,7 +2968,7 @@ const JiraTickets = ({
                     <span className="jira-meta">
                       <span>{issue.type}</span>
                       {issue.parentKey && (
-                        <a href={parentUrl(issue)} title={issue.parentSummary}>
+                        <a href={parentUrl(issue)} data-tooltip={issue.parentSummary}>
                           in {issue.parentKey}
                         </a>
                       )}
@@ -2105,7 +3011,7 @@ const JiraTickets = ({
                         {issue.summary}
                       </TicketLink>
                       {issue.parentKey && (
-                        <a className="card-parent" href={parentUrl(issue)} title={issue.parentKey}>
+                        <a className="card-parent" href={parentUrl(issue)} data-tooltip={issue.parentKey}>
                           {issue.parentSummary || issue.parentKey}
                         </a>
                       )}
@@ -2371,7 +3277,7 @@ const ContributionsCard = ({ contributions }: { contributions: Contributions | n
 }
 
 const MEMORY_TYPES = ['project', 'reference', 'feedback', 'user'] as const
-const MEMORY_PAGE = 10
+const MEMORY_PAGE = 5
 const FRESH_MS = 86_400_000
 
 // The small markdown a memory note uses: **bold**, `code` and [[links]] to
@@ -2393,7 +3299,7 @@ const Inline = ({ text, links }: { text: string; links: LinkResolver }) => (
             {part.slice(2, -2)}
           </button>
         ) : (
-          <span key={i} className="memory-link" data-missing title="No note with this name yet">
+          <span key={i} className="memory-link" data-missing data-tooltip="No note with this name yet">
             {part.slice(2, -2)}
           </span>
         )
@@ -2463,6 +3369,385 @@ const readMemoryView = (): 'list' | 'graph' => {
   } catch {
     return 'list'
   }
+}
+
+const PAGE = 5
+
+// The first five of a list, with a button that shows the rest; it folds back
+// whenever resetKey changes, such as on a new tab.
+const usePaged = <T,>(items: T[], resetKey: unknown = null) => {
+  const [showAll, setShowAll] = useState(false)
+
+  useEffect(() => setShowAll(false), [resetKey])
+
+  const visible = showAll ? items : items.slice(0, PAGE)
+  const toggle =
+    items.length > PAGE ? (
+      <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+        {showAll ? 'Show fewer' : `Show ${items.length - PAGE} more`}
+      </button>
+    ) : null
+
+  return { visible, toggle }
+}
+
+const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', auth: 'Needs authentication', failed: 'Failed' }
+const MCP_ORDER: Record<McpServer['status'], number> = { failed: 0, auth: 1, connected: 2 }
+
+// The MCP servers Claude Code would load from the watched repository, with the
+// health `claude mcp list` reports: failures first, then the ones waiting for a
+// sign-in, then the connected ones.
+const McpCard = ({ mcp, now }: { mcp: ClaudeKnowledge['mcp']; now: number }) => {
+  const [filter, setFilter] = useState<McpServer['status'] | 'all'>('all')
+  const [isChecking, setIsChecking] = useState(false)
+  const counts = { connected: 0, auth: 0, failed: 0 }
+
+  for (const server of mcp.servers) counts[server.status] += 1
+
+  const shown = mcp.servers
+    .filter(s => filter === 'all' || s.status === filter)
+    .sort((a, b) => MCP_ORDER[a.status] - MCP_ORDER[b.status] || a.name.localeCompare(b.name))
+  const paged = usePaged(shown, filter)
+
+  const check = async () => {
+    setIsChecking(true)
+    await fetch('/api/knowledge/refresh', { method: 'POST', headers: { 'X-Claude-Console': '1' } }).catch(() => null)
+    window.dispatchEvent(new Event('claude-console:refresh'))
+    setIsChecking(false)
+  }
+
+  return (
+    <section className="panel mcp" aria-labelledby="mcp-title">
+      <header className="panel-head">
+        <h2 id="mcp-title">MCP servers</h2>
+        <div className="filters" role="tablist" aria-label="MCP servers by state">
+          {(['all', 'failed', 'auth', 'connected'] as const).map(option => (
+            <button key={option} type="button" role="tab" aria-selected={filter === option} onClick={() => setFilter(option)}>
+              {option === 'all' ? 'All' : MCP_LABEL[option]}
+              <span className="count"> {option === 'all' ? mcp.servers.length : counts[option]}</span>
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ghost mcp-check" onClick={() => void check()} disabled={isChecking}>
+          {isChecking ? 'Checking…' : 'Check again'}
+        </button>
+      </header>
+      {mcp.error ? (
+        <p className="empty">{mcp.error}</p>
+      ) : mcp.checkedAt === 0 ? (
+        <p className="empty">Checking the MCP servers…</p>
+      ) : shown.length === 0 ? (
+        <p className="empty">No server in this state.</p>
+      ) : (
+        <ul className="mcp-list">
+          {paged.visible.map(server => (
+            <li key={server.name} className="mcp-server" data-status={server.status}>
+              <span className="mcp-dot" aria-hidden />
+              <span className="mcp-name">{server.name}</span>
+              <span className="mcp-state">{MCP_LABEL[server.status]}</span>
+              <code className="mcp-target" data-tooltip={server.target}>
+                {server.target}
+              </code>
+              {server.detail && <span className="mcp-detail">{server.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {shown.length > 0 && paged.toggle}
+      {mcp.checkedAt > 0 && <p className="panel-foot">Checked {ago(mcp.checkedAt, now)}</p>}
+    </section>
+  )
+}
+
+const InstructionItem = ({ item, now }: { item: Instruction; now: number }) => {
+  const [isOpen, setIsOpen] = useState(false)
+
+  return (
+    <li className="instruction" data-open={isOpen}>
+      <button type="button" className="instruction-head" aria-expanded={isOpen} onClick={() => setIsOpen(v => !v)}>
+        <span className="instruction-title">{item.title}</span>
+        <span className="tag">{item.scope === 'user' ? 'yours' : 'project'}</span>
+        <code className="instruction-path">{item.path}</code>
+        <span className="instruction-age" data-tooltip={new Date(item.updatedAt).toLocaleString()}>
+          {ago(item.updatedAt, now)}
+        </span>
+      </button>
+      {!isOpen && item.summary && <p className="instruction-summary">{item.summary}</p>}
+      {isOpen && <pre className="instruction-body">{item.body}</pre>}
+    </li>
+  )
+}
+
+// The CLAUDE.md files and rules Claude Code follows here. Clicking one shows it.
+const InstructionsCard = ({ items, now }: { items: Instruction[]; now: number }) => {
+  const paged = usePaged(items)
+
+  return (
+  <section className="panel instructions" aria-labelledby="instructions-title">
+    <header className="panel-head">
+      <h2 id="instructions-title">Instructions</h2>
+      <span className="jira-summary">{plural(items.length, 'file')}</span>
+    </header>
+    {items.length === 0 ? (
+      <p className="empty">
+        No <code>CLAUDE.md</code> or rule file, yours or the repository's.
+      </p>
+    ) : (
+      <>
+        <ul className="instruction-list">
+          {paged.visible.map(item => (
+            <InstructionItem key={item.path} item={item} now={now} />
+          ))}
+        </ul>
+        {paged.toggle}
+      </>
+    )}
+  </section>
+  )
+}
+
+const HOOK_SCOPE: Record<string, string> = { user: 'yours', project: 'project', local: 'local' }
+
+// The hooks Claude Code runs, from your settings and the repository's.
+const HooksCard = ({ hooks }: { hooks: ClaudeKnowledge['hooks'] }) => {
+  const paged = usePaged(hooks)
+
+  return (
+  <section className="panel hooks" aria-labelledby="hooks-title">
+    <header className="panel-head">
+      <h2 id="hooks-title">Hooks</h2>
+      <span className="jira-summary">{plural(hooks.length, 'hook')}</span>
+    </header>
+    {hooks.length === 0 ? (
+      <p className="empty">No hook in your settings or the repository's.</p>
+    ) : (
+      <>
+      <ul className="hook-list">
+        {paged.visible.map((hook, at) => (
+          <li key={at} className="hook">
+            <span className="hook-when">
+              <strong>{hook.event}</strong>
+              {hook.matcher && <code>{hook.matcher}</code>}
+              <span className="tag">{HOOK_SCOPE[hook.scope]}</span>
+            </span>
+            <code className="hook-command" data-tooltip={hook.command}>
+              {hook.command}
+            </code>
+          </li>
+        ))}
+      </ul>
+      {paged.toggle}
+      </>
+    )}
+  </section>
+  )
+}
+
+type ExtensionTab = 'plugins' | 'commands' | 'agents'
+
+const EXTENSION_TABS: Array<{ id: ExtensionTab; label: string; kinds: Extension['kind'][] }> = [
+  { id: 'plugins', label: 'Plugins', kinds: ['plugin', 'local plugin'] },
+  { id: 'commands', label: 'Commands', kinds: ['command'] },
+  { id: 'agents', label: 'Agents', kinds: ['agent'] },
+]
+
+// Plugins (from marketplaces and local folders), slash commands and subagents.
+const ExtensionsCard = ({ extensions }: { extensions: Extension[] }) => {
+  const [tab, setTab] = useState<ExtensionTab>('plugins')
+  const of = (id: ExtensionTab) => extensions.filter(e => EXTENSION_TABS.find(t => t.id === id)!.kinds.includes(e.kind))
+  const shown = of(tab).sort((a, b) => Number(b.isEnabled) - Number(a.isEnabled) || a.name.localeCompare(b.name))
+  const paged = usePaged(shown, tab)
+
+  return (
+    <section className="panel extensions" aria-labelledby="extensions-title">
+      <header className="panel-head">
+        <h2 id="extensions-title">Extensions</h2>
+        <div className="filters" role="tablist" aria-label="Extensions">
+          {EXTENSION_TABS.map(option => (
+            <button key={option.id} type="button" role="tab" aria-selected={tab === option.id} onClick={() => setTab(option.id)}>
+              {option.label}
+              <span className="count"> {of(option.id).length}</span>
+            </button>
+          ))}
+        </div>
+      </header>
+      {shown.length === 0 ? (
+        <p className="empty">None here, yours or the repository's.</p>
+      ) : (
+        <ul className="extension-list">
+          {paged.visible.map(item => (
+            <li key={`${item.kind}-${item.scope}-${item.name}`} className="extension" data-enabled={item.isEnabled}>
+              <span className="extension-head">
+                <span className="extension-name">{item.kind === 'command' ? `/${item.name}` : item.name}</span>
+                {item.kind === 'local plugin' && <span className="tag">local</span>}
+                <span className="tag">{item.scope === 'user' ? 'yours' : 'project'}</span>
+                {!item.isEnabled && <span className="tag">disabled</span>}
+              </span>
+              {item.description && <span className="extension-description">{item.description}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {shown.length > 0 && paged.toggle}
+    </section>
+  )
+}
+
+type SkillTab = 'personal' | 'project'
+
+const SKILL_TAB_KEY = 'claude-console:skills-tab'
+const SKILL_PAGE = 5
+
+const readSkillTab = (): SkillTab => {
+  try {
+    return localStorage.getItem(SKILL_TAB_KEY) === 'project' ? 'project' : 'personal'
+  } catch {
+    return 'personal'
+  }
+}
+
+const SkillItem = ({ skill, now }: { skill: Skill; now: number }) => {
+  const [isOpen, setIsOpen] = useState(false)
+  const [note, setNote] = useState('')
+  const command = `/${skill.name}`
+
+  useEffect(() => {
+    if (!note) return
+
+    const timer = setTimeout(() => setNote(''), 2_000)
+
+    return () => clearTimeout(timer)
+  }, [note])
+
+  return (
+    <li className="skill" data-open={isOpen}>
+      <span className="skill-head">
+        <button
+          type="button"
+          className="skill-name"
+          data-tooltip={`Copy ${command}`}
+          onClick={async () => setNote((await copy(command)) ? 'Copied' : 'Copy failed')}
+        >
+          {command}
+        </button>
+        {skill.argumentHint && <code className="skill-args">{skill.argumentHint}</code>}
+        <span className="skill-uses" data-unused={skill.uses === 0 || undefined}>
+          {skill.uses === 0 ? 'not used lately' : `used ${skill.uses}×, last ${ago(skill.lastUsedAt, now)}`}
+        </span>
+        {note && (
+          <span className="skill-note" role="status">
+            {note}
+          </span>
+        )}
+      </span>
+      {skill.description && (
+        <button
+          type="button"
+          className="skill-description"
+          aria-expanded={isOpen}
+          data-tooltip={isOpen ? 'Show less' : 'Show the whole description'}
+          onClick={() => setIsOpen(v => !v)}
+        >
+          {skill.description}
+        </button>
+      )}
+    </li>
+  )
+}
+
+// Your skills, and the ones the watched repository ships: each one's command,
+// arguments and description. Clicking a command copies it.
+const SkillsCard = ({ skills, now }: { skills: Skill[]; now: number }) => {
+  const [tab, setTab] = useState<SkillTab>(readSkillTab)
+  const [sort, setSort] = useState<'name' | 'uses'>('name')
+  const [query, setQuery] = useState('')
+  const [showAll, setShowAll] = useState(false)
+  const counts = { personal: skills.filter(s => s.source === 'personal').length, project: skills.filter(s => s.source === 'project').length }
+  const q = query.trim().toLowerCase()
+  const matching = skills
+    .filter(s => s.source === tab)
+    .filter(s => !q || `${s.name} ${s.description} ${s.argumentHint}`.toLowerCase().includes(q))
+    .sort((a, b) => (sort === 'uses' ? b.uses - a.uses || b.lastUsedAt - a.lastUsedAt : 0) || a.name.localeCompare(b.name))
+  const shown = showAll || q ? matching : matching.slice(0, SKILL_PAGE)
+
+  const choose = (next: SkillTab) => {
+    setTab(next)
+    setShowAll(false)
+
+    try {
+      localStorage.setItem(SKILL_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }
+
+  return (
+    <section className="panel skills" aria-labelledby="skills-title">
+      <header className="panel-head">
+        <h2 id="skills-title">Skills</h2>
+        <div className="filters" role="tablist" aria-label="Skills">
+          {(['personal', 'project'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              aria-controls="skills-tabpanel"
+              onClick={() => choose(option)}
+            >
+              {option === 'personal' ? 'Mine' : 'Project'}
+              <span className="count"> {counts[option]}</span>
+            </button>
+          ))}
+        </div>
+        <input
+          className="search"
+          type="search"
+          placeholder="Search"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          aria-label="Filter skills by name or description"
+        />
+        <div className="segmented" role="radiogroup" aria-label="Sort skills">
+          {(['name', 'uses'] as const).map(option => (
+            <button key={option} type="button" role="radio" aria-checked={sort === option} onClick={() => setSort(option)}>
+              {option === 'name' ? 'A–Z' : 'Most used'}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div id="skills-tabpanel" role="tabpanel">
+        {counts[tab] === 0 ? (
+          <p className="empty">
+            {tab === 'personal' ? (
+              <>
+                No skill in <code>~/.claude/skills</code> yet.
+              </>
+            ) : (
+              <>
+                The repository has no skill in <code>.claude/skills</code>.
+              </>
+            )}
+          </p>
+        ) : matching.length === 0 ? (
+          <p className="empty">No skill matches that filter.</p>
+        ) : (
+          <>
+            <ul className="skill-list">
+              {shown.map(skill => (
+                <SkillItem key={skill.path} skill={skill} now={now} />
+              ))}
+            </ul>
+            {!q && matching.length > SKILL_PAGE && (
+              <button type="button" className="ghost more" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+                {showAll ? 'Show fewer' : `Show all ${matching.length} skills`}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
 }
 
 const MemoryCard = ({ notes, now }: { notes: MemoryNote[]; now: number }) => {
@@ -2691,26 +3976,6 @@ const ArtifactsCard = ({ artifacts, sessions, now }: { artifacts: PublishedArtif
   )
 }
 
-const ProfileCard = ({ profile }: { profile: Profile | null }) => {
-  if (!profile) return null
-
-  return (
-    <section className="panel profile" aria-label={`Profile of ${profile.name}`}>
-      <img className="profile-photo" src={profile.avatarUrl} alt="" width={64} height={64} />
-      <div className="profile-text">
-        <h2 className="profile-name">
-          <a href={profile.url}>{profile.name}</a>
-        </h2>
-        {profile.bio && <p className="profile-bio">{profile.bio}</p>}
-        <p className="profile-meta">
-          @{profile.login}
-          {profile.location && <>, {profile.location}</>}
-        </p>
-      </div>
-    </section>
-  )
-}
-
 const longDay = (date: string) =>
   new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
@@ -2741,7 +4006,7 @@ const BriefingSessions = ({ briefing }: { briefing: Briefing }) => {
                 <button
                   type="button"
                   className="brief-session-head"
-                  title="Show this session below, when it is still listed"
+                  data-tooltip="Show this session below, when it is still listed"
                   onClick={() =>
                     window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail: session.id }))
                   }
@@ -2794,6 +4059,122 @@ const prLead = (prs: BriefPr[]) => {
 
 // The day at a glance, across the whole page: what the last working day held,
 // what is open now, and what is in development.
+// Links for the ticket keys in a summary: those of your tickets, and any other
+// key of the same Jira projects, built from your tickets' address. Keys of
+// other projects, and look-alikes such as UTF-8, stay plain text.
+const ticketLinks = (issues: JiraIssue[], text: string) => {
+  const links = new Map(issues.map(issue => [issue.key, issue.url] as const))
+  const browse = new Map(
+    issues.map(issue => [issue.key.split('-')[0]!, issue.url.slice(0, issue.url.length - issue.key.length)] as const),
+  )
+
+  for (const key of text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []) {
+    const base = browse.get(key.split('-')[0]!)
+
+    if (base && !links.has(key)) links.set(key, `${base}${key}`)
+  }
+
+  return links
+}
+
+const SummaryText = ({ tokens }: { tokens: SummaryToken[] }) => (
+  <>
+    {tokens.map((token, at) =>
+      token.kind === 'bold' ? (
+        <strong key={at}>
+          <SummaryText tokens={token.children} />
+        </strong>
+      ) : token.kind === 'link' ? (
+        <a key={at} href={token.url}>
+          {token.text}
+        </a>
+      ) : (
+        <span key={at}>{token.text}</span>
+      ),
+    )}
+  </>
+)
+
+const regenerateSummary = () =>
+  fetch('/api/briefing/regenerate', { method: 'POST', headers: { 'X-Claude-Console': '1' } })
+    .catch(() => null)
+    .then(() => window.dispatchEvent(new Event('claude-console:refresh')))
+
+// The briefing written by Claude: a headline, a short account of the last
+// working day, and what comes next, with pull requests and tickets linked.
+const BriefingSummaryView = ({
+  summary,
+  prUrls,
+  ticketUrls,
+  now,
+}: {
+  summary: Snapshot['summary']
+  prUrls: ReadonlyMap<number, string>
+  ticketUrls: ReadonlyMap<string, string>
+  now: number
+}) => {
+  const [isAsking, setIsAsking] = useState(false)
+  const isWriting = summary.status === 'writing' || isAsking
+  const paragraphs = summaryParagraphs(summary.text, prUrls, ticketUrls)
+
+  useEffect(() => {
+    if (summary.status !== 'writing') setIsAsking(false)
+  }, [summary.status, summary.generatedAt])
+
+  return (
+    <div className="brief-summary" aria-busy={isWriting || undefined}>
+      {paragraphs.length > 0 ? (
+        <div className="brief-summary-text">
+          {paragraphs.map((tokens, at) =>
+            at === 0 ? (
+              <p key={at} className="brief-summary-headline">
+                <SummaryText tokens={tokens} />
+              </p>
+            ) : (
+              <p key={at}>
+                <SummaryText tokens={tokens} />
+              </p>
+            ),
+          )}
+        </div>
+      ) : isWriting ? null : (
+        <p className="empty">The summary could not be written{summary.error ? `: ${summary.error}` : '.'}</p>
+      )}
+      <p className="brief-summary-meta" role="status">
+        {isWriting ? (
+          <>
+            <span className="sync" data-busy="true" aria-hidden />
+            Claude is writing your summary…
+          </>
+        ) : (
+          <>
+            {summary.generatedAt > 0 && (
+              <span data-tooltip={new Date(summary.generatedAt).toLocaleString()}>
+                Written by Claude {summary.model && `(${summary.model})`} {ago(summary.generatedAt, now)}
+              </span>
+            )}
+            {summary.error && paragraphs.length > 0 && (
+              <span className="brief-summary-error" data-tooltip={summary.error}>
+                Last update failed
+              </span>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setIsAsking(true)
+                void regenerateSummary()
+              }}
+            >
+              Regenerate
+            </button>
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
+
 const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) => {
   const [isOpen, setIsOpen] = useState(false)
   const briefing = snapshot.briefing
@@ -2804,30 +4185,56 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
     now,
   )
   const developing = snapshot.jira.filter(issue => issue.statusCategory === 'indeterminate')
-  const firstName = snapshot.profile?.name.split(' ')[0] ?? ''
+  const profile = snapshot.profile
+  const firstName = profile?.name.split(' ')[0] ?? ''
+  const summary = snapshot.summary
+  const hasSummary = summary.status !== 'off'
+  const [showDetails, setShowDetails] = useState(false)
+  const prUrls = new Map([...snapshot.prs, ...prs].map(pr => [pr.number, pr.url] as const))
+  const ticketUrls = ticketLinks(snapshot.jira, summary.text)
+  const isGridShown = !hasSummary || showDetails || summary.status === 'error'
 
   return (
     <section className="panel briefing" data-open={isOpen} aria-labelledby="briefing-title">
       <header className="brief-head">
-        <h2 id="briefing-title" className="brief-greeting">
-          {greeting(now)}
-          {firstName && `, ${firstName}`}{' '}
-          <button
-            type="button"
-            className="brief-toggle"
-            aria-expanded={isOpen}
-            aria-controls="briefing-body"
-            onClick={() => setIsOpen(v => !v)}
-          >
-            {isOpen ? '← hide your summary' : '→ read your summary here'}
-          </button>
-        </h2>
-        <span className="brief-date">
-          {new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
-          {briefing && briefing.todaySessions > 0 && <>, {plural(briefing.todaySessions, 'session')} so far today</>}
-        </span>
+        <div className="brief-identity">
+          {profile && (
+            <a className="brief-photo-link" href={profile.url} data-tooltip={`${profile.name} on GitHub`}>
+              <img className="brief-photo" src={profile.avatarUrl} alt="" width={64} height={64} />
+            </a>
+          )}
+          <div className="brief-who">
+            <h2 id="briefing-title" className="brief-greeting">
+              {greeting(now)}
+              {firstName && `, ${firstName}`}
+            </h2>
+            {profile?.bio && <p className="brief-bio">{profile.bio}</p>}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="brief-toggle"
+          aria-expanded={isOpen}
+          aria-controls="briefing-body"
+          onClick={() => setIsOpen(v => !v)}
+        >
+          {isOpen ? 'Hide your summary' : 'Read your summary'}
+        </button>
       </header>
-      <div className="brief-grid" id="briefing-body" hidden={!isOpen} data-columns={snapshot.features.jira ? 3 : 2}>
+      <div id="briefing-body" hidden={!isOpen}>
+      {hasSummary && <BriefingSummaryView summary={summary} prUrls={prUrls} ticketUrls={ticketUrls} now={now} />}
+      {hasSummary && summary.status !== 'error' && (
+        <button
+          type="button"
+          className="ghost more brief-details-toggle"
+          aria-expanded={showDetails}
+          aria-controls="briefing-details"
+          onClick={() => setShowDetails(v => !v)}
+        >
+          {showDetails ? 'Hide details' : 'Show details: sessions, pull requests and tickets'}
+        </button>
+      )}
+      <div className="brief-grid" id="briefing-details" hidden={!isGridShown} data-columns={snapshot.features.jira ? 3 : 2}>
         {briefing ? <BriefingSessions briefing={briefing} /> : <p className="empty">Reading yesterday's sessions…</p>}
         <div className="brief-col">
           <h2 className="brief-title">Pull requests</h2>
@@ -2877,6 +4284,7 @@ const BriefingCard = ({ snapshot, now }: { snapshot: Snapshot; now: number }) =>
             )}
           </div>
         )}
+      </div>
       </div>
     </section>
   )
@@ -2984,7 +4392,7 @@ const UsageCard = ({ usage, now }: { usage: Usage | null; now: number }) => {
           <dd>{compact(today.cacheRead)} tokens</dd>
         </div>
         {usage.todayCost !== null && (
-          <div title="Sum of the cost the status line reports for each session seen today, at API prices">
+          <div data-tooltip="Sum of the cost the status line reports for each session seen today, at API prices">
             <dt>At API prices</dt>
             <dd>${usage.todayCost.toFixed(2)}</dd>
           </div>
@@ -3055,11 +4463,11 @@ const UsageCard = ({ usage, now }: { usage: Usage | null; now: number }) => {
 
 // Opens a folder in a new tab of the configured terminal, resuming a Claude
 // Code session there when one is named.
-const openTab = async (dir: string, session?: string) => {
+const openTab = async (dir: string, session?: string, isRemote = false) => {
   const response = await fetch('/api/terminal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
-    body: JSON.stringify({ dir, session }),
+    body: JSON.stringify({ dir, session, ...(isRemote ? { remote: true } : {}) }),
   })
 
   return response.ok
@@ -3125,6 +4533,389 @@ const useSessionFromUrl = (isReady: boolean) => {
   }, [isReady])
 }
 
+const TOOLTIP_ID = 'console-tooltip'
+const TOOLTIP_DELAY_MS = 350
+const TOOLTIP_GAP = 8
+
+type Tip = { text: string; x: number; top: number; bottom: number }
+
+// One tooltip for the whole page, in the look of the session recap: any element
+// with data-tooltip shows its text above it (or below, near the top of the
+// window) after a short pause on hover, or at once on keyboard focus. It is tied
+// to the element with aria-describedby while it shows.
+const TooltipLayer = () => {
+  const [tip, setTip] = useState<Tip | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let target: HTMLElement | null = null
+
+    const hide = () => {
+      clearTimeout(timer)
+
+      if (target?.getAttribute('aria-describedby') === TOOLTIP_ID) target.removeAttribute('aria-describedby')
+
+      target = null
+      setTip(null)
+    }
+
+    const show = (element: HTMLElement, delay: number) => {
+      hide()
+      target = element
+      timer = setTimeout(() => {
+        const text = element.dataset.tooltip
+
+        if (!text || !element.isConnected) return
+
+        const rect = element.getBoundingClientRect()
+
+        if (!element.hasAttribute('aria-describedby')) element.setAttribute('aria-describedby', TOOLTIP_ID)
+
+        setTip({ text, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom })
+      }, delay)
+    }
+
+    const tooltipOf = (node: EventTarget | null) =>
+      (node instanceof Element ? node.closest<HTMLElement>('[data-tooltip]') : null) ?? null
+
+    const onOver = (event: PointerEvent) => {
+      const element = tooltipOf(event.target)
+
+      if (element === target) return
+      if (element) show(element, TOOLTIP_DELAY_MS)
+      else hide()
+    }
+
+    const onFocusIn = (event: FocusEvent) => {
+      const element = tooltipOf(event.target)
+
+      if (element && element.matches(':focus-visible')) show(element, 0)
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') hide()
+    }
+
+    document.addEventListener('pointerover', onOver)
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('focusout', hide)
+    document.addEventListener('pointerdown', hide)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', hide, true)
+    window.addEventListener('blur', hide)
+
+    return () => {
+      hide()
+      document.removeEventListener('pointerover', onOver)
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('focusout', hide)
+      document.removeEventListener('pointerdown', hide)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', hide, true)
+      window.removeEventListener('blur', hide)
+    }
+  }, [])
+
+  // Placed once its size is known: above when it fits, otherwise below, and
+  // always inside the window.
+  useLayoutEffect(() => {
+    if (!tip || !box.current) {
+      setPlace(null)
+      return
+    }
+
+    const { width, height } = box.current.getBoundingClientRect()
+    const fitsAbove = tip.top - height - TOOLTIP_GAP > 4
+    const left = Math.min(Math.max(8, tip.x - width / 2), window.innerWidth - width - 8)
+
+    setPlace({ left, top: fitsAbove ? tip.top - height - TOOLTIP_GAP : tip.bottom + TOOLTIP_GAP })
+  }, [tip])
+
+  if (!tip) return null
+
+  return (
+    <div
+      ref={box}
+      id={TOOLTIP_ID}
+      role="tooltip"
+      className="tooltip"
+      style={place ? { left: place.left, top: place.top } : { left: -9999, top: -9999 }}
+    >
+      {tip.text}
+    </div>
+  )
+}
+
+type PageTab = 'dashboard' | 'knowledge' | 'settings'
+
+
+const titleCase = (word: string) => word.charAt(0).toUpperCase() + word.slice(1)
+
+// The window bar's pet: on or off, which pet, and which color, each either fixed
+// or drawn at random. Changes apply at once.
+const PetSettingsCard = () => {
+  const [settings, setSettings] = useState<PetSettings | null>(null)
+  const [options, setOptions] = useState<PetOptions>({})
+  const [error, setError] = useState('')
+  const [isLoadingOptions, setIsLoadingOptions] = useState(true)
+  const [size, setSize] = useState(30)
+  // Only the answer to the latest save counts; an earlier one arriving late
+  // must not undo a newer choice.
+  const lastSave = useRef(0)
+
+  useEffect(() => {
+    fetch('/api/pet-settings')
+      .then(response => response.json() as Promise<{ settings: PetSettings; options: PetOptions }>)
+      .then(body => {
+        setSettings(body.settings)
+        setSize(body.settings.size)
+        setOptions(body.options)
+      })
+      .catch(() => setError('The pet settings could not be read.'))
+      .finally(() => setIsLoadingOptions(false))
+  }, [])
+
+  const save = async (change: Partial<PetSettings>) => {
+    if (!settings) return
+
+    const previous = settings
+    const id = (lastSave.current += 1)
+
+    setSettings({ ...settings, ...change })
+    setError('')
+
+    const response = await fetch('/api/pet-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Claude-Console': '1' },
+      body: JSON.stringify(change),
+    }).catch(() => null)
+    const body = ((await response?.json().catch(() => null)) ?? {}) as { settings?: PetSettings; error?: string }
+
+    if (id !== lastSave.current) return
+
+    if (response?.ok && body.settings) {
+      setSettings(body.settings)
+      window.dispatchEvent(new Event(SYSTEM_REFRESH))
+    } else {
+      setSettings(previous)
+      setError(body.error ?? 'The change could not be saved.')
+    }
+  }
+
+  const kinds = Object.keys(options).filter(kind => options[kind]!.length > 0)
+  const colors = settings?.kind ? options[settings.kind] ?? [] : []
+  const preview = settings?.kind && settings.color ? `/api/pet/${settings.kind}/${settings.color}_idle_8fps.gif` : ''
+
+  return (
+    <section className="panel pet-settings" aria-labelledby="pet-settings-title">
+      <header className="panel-head">
+        <h2 id="pet-settings-title">Pet</h2>
+      </header>
+      {!settings ? (
+        <p className="empty">{error || 'Reading the pet settings…'}</p>
+      ) : (
+        <div className="settings-form">
+          <label className="switch-row">
+            <span className="switch-text">
+              <span className="setting-label">Show a pet in the window bar</span>
+              <span className="setting-hint">
+                A pet from vscode-pets walks the empty bar; click it to throw balls.
+              </span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              className="switch"
+              aria-checked={settings.isEnabled}
+              onClick={() => void save({ isEnabled: !settings.isEnabled })}
+            >
+              <span className="switch-thumb" aria-hidden="true" />
+            </button>
+          </label>
+          <div className="setting-row" data-disabled={!settings.isEnabled || undefined}>
+            <label className="setting-field">
+              <span className="setting-label">Pet</span>
+              <select
+                value={settings.kind}
+                disabled={!settings.isEnabled || isLoadingOptions}
+                onChange={event => void save({ kind: event.target.value, color: '' })}
+              >
+                <option value="">Random each start</option>
+                {kinds.map(kind => (
+                  <option key={kind} value={kind}>
+                    {titleCase(kind.replace(/-/g, ' '))}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="setting-field">
+              <span className="setting-label">Color</span>
+              <select
+                value={settings.color}
+                disabled={!settings.isEnabled || !settings.kind}
+                onChange={event => void save({ color: event.target.value })}
+              >
+                <option value="">Random</option>
+                {colors.map(color => (
+                  <option key={color} value={color}>
+                    {titleCase(color.replace(/([a-z])(brown|gray|white)$/, '$1 $2'))}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="pet-preview" aria-hidden="true">
+              {preview ? <img src={preview} alt="" width={60} /> : <span>{settings.kind ? 'Any color' : 'Any pet'}</span>}
+            </div>
+          </div>
+          <div className="setting-field setting-size" data-disabled={!settings.isEnabled || undefined}>
+            <label className="setting-label" htmlFor="pet-size">
+              Size <output htmlFor="pet-size">{size}px</output>
+            </label>
+            <input
+              id="pet-size"
+              type="range"
+              min={16}
+              max={80}
+              step={2}
+              value={size}
+              disabled={!settings.isEnabled}
+              onChange={event => setSize(Number(event.target.value))}
+              onPointerUp={() => size !== settings.size && void save({ size })}
+              onKeyUp={() => size !== settings.size && void save({ size })}
+              aria-describedby="pet-size-hint"
+            />
+            <span id="pet-size-hint" className="setting-hint">
+              The sprite's width; 30px is the vscode-pets default. Above about 50px, taller pets go past the 40px bar.
+            </span>
+          </div>
+          {settings.isEnabled && kinds.length === 0 && !isLoadingOptions && (
+            <p className="setting-hint">
+              The pets could not be fetched from the Visual Studio Marketplace; they are tried again on the next start.
+            </p>
+          )}
+          {error && (
+            <p className="modal-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+const PAGE_TAB_KEY = 'claude-console:page'
+
+const readPageTab = (): PageTab => {
+  try {
+    const stored = localStorage.getItem(PAGE_TAB_KEY)
+
+    return stored === 'knowledge' || stored === 'settings' ? stored : 'dashboard'
+  } catch {
+    return 'dashboard'
+  }
+}
+
+const PAGE_TABS: Array<{ id: PageTab; label: string }> = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'knowledge', label: 'Claude Knowledge' },
+  { id: 'settings', label: 'Configurations' },
+]
+
+const CogIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+    <path
+      d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    />
+    <path
+      d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+const PageTabs = ({ tab, onChoose }: { tab: PageTab; onChoose: (next: PageTab) => void }) => (
+  <div className="page-tabs" role="tablist" aria-label="Console pages">
+    {PAGE_TABS.map(option => (
+      <button
+        key={option.id}
+        type="button"
+        role="tab"
+        id={`page-tab-${option.id}`}
+        aria-selected={tab === option.id}
+        aria-controls="page-panel"
+        aria-label={option.id === 'settings' ? option.label : undefined}
+        data-tooltip={option.id === 'settings' ? option.label : undefined}
+        className={option.id === 'settings' ? 'page-tab-icon' : undefined}
+        tabIndex={tab === option.id ? 0 : -1}
+        onClick={() => onChoose(option.id)}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+
+          event.preventDefault()
+
+          const at = PAGE_TABS.findIndex(o => o.id === tab)
+          const next = PAGE_TABS[(at + (event.key === 'ArrowRight' ? 1 : PAGE_TABS.length - 1)) % PAGE_TABS.length]!
+
+          onChoose(next.id)
+          document.getElementById(`page-tab-${next.id}`)?.focus()
+        }}
+      >
+        {option.id === 'settings' ? <CogIcon /> : option.label}
+      </button>
+    ))}
+  </div>
+)
+
+// Keeps the chosen page across visits, and comes back to the dashboard when
+// something asks to show a session, which only the dashboard lists.
+const usePageTab = () => {
+  const [tab, setTab] = useState<PageTab>(readPageTab)
+
+  const choose = useCallback((next: PageTab) => {
+    setTab(next)
+
+    try {
+      localStorage.setItem(PAGE_TAB_KEY, next)
+    } catch {
+      // The choice still applies for this visit when storage is unavailable.
+    }
+  }, [])
+
+  useEffect(() => {
+    const onFocus = (event: Event) => {
+      if (readPageTab() === 'dashboard' && tab === 'dashboard') return
+
+      choose('dashboard')
+
+      // The sessions panel was not mounted to hear it: ask again once it is.
+      const detail = (event as CustomEvent<string>).detail
+
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('claude-console:focus-session', { detail }))),
+      )
+    }
+
+    if (tab === 'dashboard') return
+
+    window.addEventListener('claude-console:focus-session', onFocus)
+
+    return () => window.removeEventListener('claude-console:focus-session', onFocus)
+  }, [tab, choose])
+
+  return [tab, choose] as const
+}
+
+const isLoadingPreview = new URLSearchParams(window.location.search).has('loading')
+
 export const App = () => {
   const { snapshot, error, isRefreshing, isFetching, refresh } = useSnapshot()
   const now = useNow()
@@ -3136,18 +4927,24 @@ export const App = () => {
 
   useExternalLinks()
 
+  const [page, choosePage] = usePageTab()
+
   const title = snapshot?.features.title
+
+  useEffect(() => {
+    if (!snapshot) return
+
+    syncFavorites(snapshot.favorites, snapshot.generatedAt)
+    syncNames(snapshot.names, snapshot.generatedAt)
+  }, [snapshot])
 
   useEffect(() => {
     if (title) document.title = title
   }, [title])
 
-  if (!snapshot) {
-    return (
-      <main className="shell loading">
-        <p>{error ? `Unable to load the console: ${error}` : 'Reading worktrees, pull requests and sessions…'}</p>
-      </main>
-    )
+  // ?loading keeps the loading screen up, to look at it.
+  if (!snapshot || isLoadingPreview) {
+    return <EmojiLoader message={error ? `Unable to load the console: ${error}` : 'Reading worktrees, pull requests and sessions…'} />
   }
 
   const problems = [
@@ -3159,6 +4956,8 @@ export const App = () => {
     snapshot.errors.queue && `The review queue could not be read: ${snapshot.errors.queue}`,
     snapshot.errors.contributions && `Activity could not be read: ${snapshot.errors.contributions}`,
     snapshot.errors.memory && `Memory could not be read: ${snapshot.errors.memory}`,
+    snapshot.errors.skills && `Skills could not be read: ${snapshot.errors.skills}`,
+    snapshot.errors.knowledge && `Claude's setup could not be read: ${snapshot.errors.knowledge}`,
     snapshot.errors.artifacts && `Artifacts could not be read: ${snapshot.errors.artifacts}`,
   ].filter(Boolean)
 
@@ -3166,6 +4965,7 @@ export const App = () => {
     <>
       <WindowBar title={snapshot.features.title} hasIcon={snapshot.features.hasIcon} />
       <ConfirmHost />
+      <TooltipLayer />
       <main className="shell">
         <BurstLayer />
         <header className="top">
@@ -3177,7 +4977,7 @@ export const App = () => {
                 data-busy={isFetching || isRefreshing}
                 role="status"
                 aria-label={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
-                title={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
+                data-tooltip={isFetching || isRefreshing ? 'Updating now' : 'Live: updates every 10 seconds'}
               />
               Worktrees {ago(snapshot.worktreesAt, now)}, pull requests {ago(snapshot.prsAt, now)}
             </span>
@@ -3215,45 +5015,79 @@ export const App = () => {
         ) : (
         <>
         <BriefingCard snapshot={snapshot} now={now} />
-        <div className="grid">
-          <div className="column">
-            <Sessions
-              sessions={snapshot.sessions}
-              now={now}
-              worktrees={snapshot.worktrees}
-              prs={snapshot.prs}
-              queue={snapshot.queue}
-              artifacts={snapshot.artifacts}
-              newSession={snapshot.features.newSession}
-              repo={snapshot.repo}
-            />
-            <Worktrees worktrees={snapshot.worktrees} now={now} />
-            {snapshot.features.jira && (
-              <JiraTickets
-                issues={snapshot.jira}
-                worktrees={snapshot.worktrees}
-                prs={snapshot.prs}
-                sessions={snapshot.sessions}
-                now={now}
-                newSession={snapshot.features.newSession}
-                startWork={snapshot.features.startWork}
-                repo={snapshot.repo}
-              />
-            )}
-            <MemoryCard notes={snapshot.memory} now={now} />
+        <PageTabs tab={page} onChoose={choosePage} />
+        <div id="page-panel" role="tabpanel" aria-labelledby={`page-tab-${page}`}>
+        {page === 'dashboard' ? (
+          <>
+            <div className="grid">
+              <div className="column">
+                <Sessions
+                  sessions={snapshot.sessions}
+                  now={now}
+                  worktrees={snapshot.worktrees}
+                  prs={snapshot.prs}
+                  queue={snapshot.queue}
+                  artifacts={snapshot.artifacts}
+                  newSession={snapshot.features.newSession}
+                  repo={snapshot.repo}
+                  favoriteSessions={snapshot.favoriteSessions}
+                />
+                <Worktrees worktrees={snapshot.worktrees} now={now} />
+                <PullRequests
+                  prs={snapshot.prs}
+                  assigned={snapshot.assignedPrs}
+                  now={now}
+                  sessions={snapshot.sessions}
+                  setup={snapshot.features.newSession}
+                  repo={snapshot.repo}
+                />
+                {snapshot.features.jira && (
+                  <JiraTickets
+                    issues={snapshot.jira}
+                    worktrees={snapshot.worktrees}
+                    prs={snapshot.prs}
+                    sessions={snapshot.sessions}
+                    now={now}
+                    newSession={snapshot.features.newSession}
+                    startWork={snapshot.features.startWork}
+                    repo={snapshot.repo}
+                  />
+                )}
+              </div>
+              <div className="column">
+                {snapshot.features.services && <ServicesPanel sessions={snapshot.sessions} now={now} />}
+                <ContributionsCard contributions={snapshot.contributions} />
+                <UsageCard usage={snapshot.usage} now={now} />
+                {snapshot.features.reviewQueue && (
+                  <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
+                )}
+              </div>
+            </div>
+          </>
+        ) : page === 'settings' ? (
+          <div className="settings-page">
+            <PetSettingsCard />
           </div>
-          <div className="column">
-            {snapshot.features.services && <ServicesPanel sessions={snapshot.sessions} now={now} />}
-            <ProfileCard profile={snapshot.profile} />
-            <ContributionsCard contributions={snapshot.contributions} />
-            <UsageCard usage={snapshot.usage} now={now} />
-            <PullRequests prs={snapshot.prs} now={now} sessions={snapshot.sessions} />
-            {snapshot.features.reviewQueue && (
-              <ReviewQueuePanel queue={snapshot.queue} setup={snapshot.features.reviewQueue} now={now} />
-            )}
-            <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
+        ) : (
+          <div className="knowledge">
+            <div className="grid knowledge-wide">
+              <MemoryCard notes={snapshot.memory} now={now} />
+              <ArtifactsCard artifacts={snapshot.artifacts} sessions={snapshot.sessions} now={now} />
+            </div>
+            <div className="grid knowledge-wide">
+              <SkillsCard skills={snapshot.skills} now={now} />
+              <McpCard mcp={snapshot.knowledge.mcp} now={now} />
+            </div>
+            <div className="grid knowledge-wide">
+              <InstructionsCard items={snapshot.knowledge.instructions} now={now} />
+              <HooksCard hooks={snapshot.knowledge.hooks} />
+            </div>
+            <div className="grid knowledge-wide">
+              <ExtensionsCard extensions={snapshot.knowledge.extensions} />
+            </div>
           </div>
-        </div>
+        )}
+      </div>
         </>
         )}
         </TicketKeys.Provider>

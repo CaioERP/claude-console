@@ -454,3 +454,14 @@ describe('worktreeNameOf', () => {
     expect(worktreeNameOf('/home/dev/projects/acme-app')).toBe('acme-app')
   })
 })
+
+describe('remoteUrlOf', () => {
+  it('builds the claude.ai address of a Remote Control session, and nothing else', async () => {
+    const { remoteUrlOf } = await import('./collect')
+
+    expect(remoteUrlOf('session_01AbCdEf')).toBe('https://claude.ai/code/session_01AbCdEf')
+    expect(remoteUrlOf(undefined)).toBe('')
+    expect(remoteUrlOf('session_x/../../evil')).toBe('')
+    expect(remoteUrlOf('javascript:alert(1)')).toBe('')
+  })
+})

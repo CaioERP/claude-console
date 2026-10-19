@@ -27,9 +27,25 @@ export type Session = {
   isRunning: boolean
   runStatus: string
   runSince: number
+  // Where the session continues on claude.ai, while Remote Control is on.
+  remoteUrl: string
+  // The name Claude Code knows, when the console shows one you gave it instead.
+  claudeName?: string
 }
 
-export type LiveStatus = Record<string, { status: string; since: number; agents: number; cost: number | null }>
+// What is kept of a starred session, enough to list and resume it after its
+// snapshot is gone.
+export type FavoriteSession = {
+  id: string
+  name: string
+  branch: string
+  top: string
+  dir: string
+  resumeDir: string
+  addedAt: number
+}
+
+export type LiveStatus = Record<string, { status: string; since: number; agents: number; cost: number | null; remoteUrl: string }>
 
 export type FocusRequest = { session: string; at: number }
 
@@ -68,6 +84,7 @@ export type Check = {
 
 export type PullRequest = {
   repo: string
+  author: string
   number: number
   title: string
   url: string
@@ -134,6 +151,39 @@ export type QueuedPr = {
 
 export type ReviewQueue = { name: string; repo: string; waiting: QueuedPr[]; recent: QueuedPr[] }
 
+// What the worktrees take on disk, measured in the background, and how full the
+// disk is.
+export type DiskUsage = {
+  worktrees: Array<{ path: string; bytes: number }>
+  totalBytes: number
+  scannedAt: number
+  isScanning: boolean
+  disk: { size: number; used: number; free: number } | null
+}
+
+// The pet walking in the window bar: its sprites, as paths under /api/pet/.
+export type Pet = {
+  kind: string
+  color: string
+  credit: string
+  walk: string
+  idle: string
+  // Empty when the pet has no sprite for it.
+  lie: string
+  run: string
+  withBall: string
+  // The sprite's width in pixels.
+  size: number
+}
+
+// How the window bar's pet is set: on or off, and a pet and color, each fixed
+// or, when empty, drawn at random.
+// size is the sprite's width in pixels.
+export type PetSettings = { isEnabled: boolean; kind: string; color: string; size: number }
+
+// The pets that can be chosen, with the colors each comes in.
+export type PetOptions = Record<string, string[]>
+
 export type Battery = { percent: number; isCharging: boolean; isPluggedIn: boolean }
 
 export type ConsoleFeatures = {
@@ -144,12 +194,52 @@ export type ConsoleFeatures = {
   // The repositories Start Work offers, by name, when it is configured.
   startWork: { repos: string[] } | null
   services: boolean
-  newSession: { needsInput: boolean; inputLabel: string; prompt: string; description: string }
+  newSession: {
+    needsInput: boolean
+    inputLabel: string
+    prompt: string
+    description: string
+    environments: Array<{ label: string; value: string }>
+  }
 }
 
 export type ContributionDay = { date: string; github: number; claude: number }
 
 export type Contributions = { days: ContributionDay[]; githubAt: number }
+
+export type Skill = {
+  name: string
+  description: string
+  argumentHint: string
+  source: 'personal' | 'project'
+  path: string
+  updatedAt: number
+  // Uses in the scanned transcripts, by Claude or by typing the command.
+  uses: number
+  lastUsedAt: number
+}
+
+export type McpServer = { name: string; target: string; status: 'connected' | 'auth' | 'failed'; detail: string }
+
+// A CLAUDE.md or rule file: its first heading and paragraph, and the full text.
+export type Instruction = { scope: 'user' | 'project'; path: string; title: string; summary: string; body: string; updatedAt: number }
+
+export type Hook = { scope: 'user' | 'project' | 'local'; event: string; matcher: string; command: string }
+
+export type Extension = {
+  kind: 'plugin' | 'local plugin' | 'command' | 'agent'
+  scope: 'user' | 'project'
+  name: string
+  description: string
+  isEnabled: boolean
+}
+
+export type ClaudeKnowledge = {
+  mcp: { servers: McpServer[]; checkedAt: number; error: string }
+  instructions: Instruction[]
+  hooks: Hook[]
+  extensions: Extension[]
+}
 
 export type MemoryNote = {
   file: string
@@ -192,6 +282,17 @@ export type DaySession = {
   recap: string
 }
 
+// The written summary of the briefing: off when not configured, writing while
+// Claude works on it, ready once written, error when the first try failed.
+export type BriefingSummary = {
+  status: 'off' | 'writing' | 'ready' | 'error'
+  text: string
+  generatedAt: number
+  model: string
+  // Why the last run failed, even while an older summary still shows.
+  error: string
+}
+
 export type Briefing = {
   day: string
   isYesterday: boolean
@@ -222,15 +323,26 @@ export type Snapshot = {
   jiraAt: number
   queue: ReviewQueue | null
   features: ConsoleFeatures
+  // The ids of the starred sessions, newest first, and those no longer among
+  // the recent sessions, rebuilt from what was kept.
+  favorites: string[]
+  favoriteSessions: Session[]
+  // The names given in the console, by session id.
+  names: Record<string, string>
   contributions: Contributions | null
   memory: MemoryNote[]
+  skills: Skill[]
+  knowledge: ClaudeKnowledge
   artifacts: PublishedArtifact[]
   profile: Profile | null
   briefing: Briefing | null
+  summary: BriefingSummary
   recentPrs: RecentPr[]
+  // Open pull requests by others that are assigned to you or ask for your review.
+  assignedPrs: PullRequest[]
   worktreesAt: number
   prsAt: number
-  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; artifacts?: string; profile?: string }
+  errors: { worktrees?: string; prs?: string; usage?: string; jira?: string; queue?: string; contributions?: string; memory?: string; skills?: string; knowledge?: string; artifacts?: string; profile?: string }
 }
 
 // A pull request linked to a ticket, open or closed, in any repository.

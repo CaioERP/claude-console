@@ -36,9 +36,28 @@
     "site": "https://liferay.atlassian.net"
   },
   "newSession": {
-    "prompt": "/setup-faro-worktree {input}",
-    "inputLabel": "Ticket or name",
-    "description": "Creates an osb-faro-web worktree off upstream/master, starts its webpack dev server, and opens a Claude session in it that asks what the worktree is for."
+    "prompt": "/setup-faro-worktree {input} {env}",
+    "inputLabel": "Ticket, name or pull request",
+    "description": "Creates an osb-faro-web worktree (off upstream/master, or from the pull request's branch), optionally starts its webpack dev server against the chosen environment, and opens a Claude session in it that asks what the worktree is for.",
+    "environments": [
+      {
+        "label": "STG",
+        "value": "stg"
+      },
+      {
+        "label": "INTERNAL",
+        "value": "internal"
+      },
+      {
+        "label": "PROD",
+        "value": "prod"
+      }
+    ]
+  },
+  "briefing": {
+    "model": "haiku",
+    "language": "English",
+    "maxBudgetUsd": 0.1
   },
   "reviewQueue": {
     "repo": "brianchandotcom/liferay-portal",
